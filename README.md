@@ -34,17 +34,25 @@ Every email is sent from the queue, so **a queue worker must be running** or not
 php artisan queue:work --queue=default
 ```
 
-In production, run the worker under a process supervisor such as Supervisor or systemd, and restart it after each deploy (`php artisan queue:restart`). Scheduled emails and campaigns are delayed queue jobs, so no cron entry or scheduler is needed.
+In production, run the worker under a process supervisor such as Supervisor or systemd, and restart it after each deploy (`php artisan queue:restart`). Scheduled emails and campaigns are delayed queue jobs.
+
+Laravel's scheduler must also run every minute. It re-checks sending domains daily (`prosend:check-domains`, 03:00) and reviews warm-up plans daily (`prosend:evaluate-warmups`, 00:05):
+
+```cron
+* * * * * cd /path/to/prosend && php artisan schedule:run >> /dev/null 2>&1
+```
 
 `DB_QUEUE_RETRY_AFTER` (660 seconds) must stay longer than the slowest job, which is campaign preparation at 600 seconds. Otherwise a running job can be started a second time.
 
 ## Before sending for real
 
 1. **Verify the sender with Brevo.** In Brevo, go to Senders, Domains & Dedicated IPs. Authenticate your domain (SPF, DKIM, DMARC) and verify the From address. Mail from an unverified sender is rejected or lands in spam. A free mailbox such as Gmail is a poor From address for bulk mail; use a domain you own.
-2. **Mark the sender as verified in ProSend** under Deliverability > Sender identities. ProSend cannot check this itself yet, so this records an administrator's confirmation.
-3. **Set up delivery webhooks.** Open the provider under Infrastructure > SMTP providers and choose More > Set up webhook. Copy the URL, which is shown once. In Brevo, add it under Transactional > Settings > Webhook and select delivered, soft bounce, hard bounce, invalid email, blocked, error, spam, unsubscribed, opened, and clicked. Without webhooks ProSend only knows that Brevo *accepted* an email, not whether it was delivered, bounced, or reported as spam.
-4. **Set `APP_URL` to the public HTTPS address.** Unsubscribe links and webhook URLs are built from it, and webhooks cannot reach `localhost`.
-5. **Set `PROSEND_REQUIRE_VERIFIED_SENDERS=true`.** It defaults to true when `APP_ENV=production`.
+2. **Add a Brevo API key** to the provider under Infrastructure > SMTP providers (Brevo: SMTP & API > API keys; it is different from the SMTP key). ProSend then checks sender and domain verification with Brevo directly: use **Check with Brevo** under Deliverability > Sender identities. Without an API key, an administrator confirms verification manually with **Mark as verified**.
+3. **Add your domain** under Deliverability > Domain authentication and click **Check now**. The page lists the records Brevo expects, what public DNS shows, and what to fix.
+4. **Set up delivery webhooks.** Open the provider under Infrastructure > SMTP providers and choose More > Set up webhook. Copy the URL, which is shown once. In Brevo, add it under Transactional > Settings > Webhook and select delivered, soft bounce, hard bounce, invalid email, blocked, error, spam, unsubscribed, opened, and clicked. Without webhooks ProSend only knows that Brevo *accepted* an email, not whether it was delivered, bounced, or reported as spam.
+5. **Set `APP_URL` to the public HTTPS address.** Unsubscribe links and webhook URLs are built from it, and webhooks cannot reach `localhost`.
+6. **Set `PROSEND_REQUIRE_VERIFIED_SENDERS=true`.** It defaults to true when `APP_ENV=production`.
+7. **For a new domain or account, create a warm-up plan** (see below) before sending campaigns.
 
 ## How sending works
 
@@ -72,8 +80,8 @@ Each send job claims its message atomically before contacting the provider, and 
 
 | Role | Can |
 | --- | --- |
-| Administrator | Everything, including SMTP providers, sender identities, users, removing suppressions, and audit logs. |
-| Sender | Manage contacts and lists, import and export, compose email, and run campaigns. |
+| Administrator | Everything, including SMTP providers, sender identities, domain authentication, warm-up plans, users, removing suppressions, and audit logs. |
+| Sender | Manage contacts, lists, segments, and templates; import and export; compose email; and run campaigns. |
 | Viewer | Read the dashboard, email activity, contacts, and campaigns. |
 
 Provider changes (never the secrets themselves), role changes, sender verification, campaign launches, pauses, cancellations and retries, and suppression changes are recorded under System > Audit logs.
@@ -83,6 +91,113 @@ Provider changes (never the secrets themselves), role changes, sender verificati
 Contacts > Import / export > Import CSV accepts any CSV with an email column, maps the columns, and processes the file on the queue. Rows that fail validation can be downloaded as a CSV from the completion notification. Existing contacts are matched by email, and empty cells never overwrite saved data. Every import must confirm that the contacts asked to receive email; purchased, rented, or scraped lists must not be used.
 
 For small lists, Contacts > Import / export > Paste email addresses accepts addresses separated by commas, spaces, or new lines.
+
+## Templates
+
+Email Operations > Email templates holds reusable content. Every saved change becomes a new numbered version. Restoring an old version saves it as a new version, so history is never rewritten. **Add sample templates** creates welcome, email verification, password reset, account notification, order update, newsletter, and announcement templates.
+
+- Transactional and marketing templates are kept apart: a campaign or composed email can only use a template of its own type, and only active templates are offered.
+- Variables: the built-in merge tags are `first_name`, `last_name`, `company_name`, `email`, and `unsubscribe_url`. Any other `{{ name }}` is read from the contact's custom attributes, for example `{{ action_url }}` or `{{ order_number }}`. Values are always escaped, and links built from them are sanitized.
+- **Required variables:** contacts without a value for one of these are skipped by campaigns, and rejected in Compose. Recipients never get an email with a blank link.
+
+## Segments
+
+Audiences > Segments are rule-based audiences that update themselves. Rules cover consent, list membership, tags, email domain, company, custom attributes, date added, unsubscribe status, recent opens or clicks (approximate), and recent sends. A campaign evaluates its segment when it starts sending. Suppression and consent checks still apply on top.
+
+## Domain authentication
+
+Deliverability > Domain authentication reports two things separately:
+
+1. **Found in DNS:** SPF, DKIM (Brevo selectors `brevo1`/`brevo2` or `mail`), and DMARC with its policy. A record existing is not proof that it is correct.
+2. **Verified by the provider:** with a Brevo API key, Brevo's own `verified` and `authenticated` status, plus the exact records Brevo expects.
+
+A domain is **Ready** only when the provider reports it authenticated (where an API key allows checking) and both DKIM and DMARC records exist. Campaigns show a warning when the sender's domain isn't ready. DNS lookups use the server's resolver and can lag behind recent changes.
+
+## Warm-up planner
+
+Deliverability > Warm-up planner limits daily volume for a provider, or for one domain on it, so sending grows gradually. A plan does nothing until an administrator approves it. Once active, ProSend enforces it: email over today's limit, outside the sending hours, or under a paused plan waits and is sent later. It is never dropped.
+
+- The limit never exceeds the provider's daily limit.
+- Each day at 00:05 the plan is reviewed against the last 7 days of real results. The limit rises one step only when hard bounces and complaints are within the plan's limits, at least 80% of the current limit was actually used, and the ramp interval has passed.
+- If hard bounces or complaints go over the limits, the plan pauses itself and says why. Throttling, unauthenticated domains, and too little data produce recommendations instead of increases.
+- ProSend never simulates opens, clicks, or replies, and never sends to fake mailboxes. Opens and clicks are not used in the review because privacy proxies and scanners make them unreliable. A schedule does not guarantee inbox placement. `App\Services\Warmup\Contracts\DeliverabilityMonitor` is the extension point for a real third-party monitoring service.
+
+## Reports
+
+The dashboard covers delivery stats, sending volume, outcomes, bounce and complaint rate trends, volume by sending domain, provider performance, campaign performance, and queue throughput. All of it is filterable by date, email type, provider, campaign, and sending domain. Email activity and the suppression list have tabs for bounces, complaints, failures, and unsubscribes. Email activity and each campaign's recipients can be exported to CSV.
+
+## Sending API
+
+Other applications can send transactional email through ProSend and read its status, without ever holding SMTP credentials. The full reference is [docs/api/openapi.yaml](docs/api/openapi.yaml) (OpenAPI 3.1).
+
+### API keys
+
+An administrator creates keys under Infrastructure > API keys. Each key has:
+
+- **Scopes:** `emails:send`, `emails:send_marketing` (marketing email also needs `emails:send`), `emails:read` (emails this key sent), and `emails:read_all` (every email).
+- **Allowed senders:** the sender identities it may use as From. Required for sending keys.
+- **Limits:** requests per minute (default 60), an optional daily send limit, an optional IP allowlist (addresses or CIDR ranges), and an optional expiry.
+- **Mode:** a **live** key (`psk_live_…`) sends. A **test** key (`psk_test_…`) runs every check and records the email with the status *Test (not sent)*, but never contacts a provider. Test emails are left out of reports.
+
+The full key is shown **once**, when it is created or rotated. ProSend stores only a hash of the secret, so a lost key cannot be recovered: rotate it. Rotating issues a new key and keeps the old one working for a grace period you choose (none, 1, 3, or 7 days). Revoking stops a key immediately. Creating, editing, rotating, and revoking keys are audit-logged; the logs never include the secret.
+
+Send the key in the `Authorization` header. Keys in URLs are refused, so they don't end up in server logs or browser history.
+
+### Examples
+
+```sh
+curl https://prosend.example.com/api/v1/emails \
+  -H "Authorization: Bearer $PROSEND_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-1042-receipt" \
+  -d '{
+        "from": "billing@acme.test",
+        "to": [{"email": "jane@example.com", "name": "Jane Doe"}],
+        "purpose": "transactional",
+        "template_id": 12,
+        "variables": {"order_number": "1042"},
+        "tags": ["receipt"],
+        "metadata": {"order_id": "1042"}
+      }'
+```
+
+```json
+{
+  "data": [{ "id": "9d1c…", "to": "jane@example.com", "status": "queued" }],
+  "meta": { "request_id": "req_01jd…", "idempotent_replay": false, "test_mode": false }
+}
+```
+
+```sh
+curl https://prosend.example.com/api/v1/emails/9d1c… -H "Authorization: Bearer $PROSEND_API_KEY"
+curl "https://prosend.example.com/api/v1/emails?status=bounced&tag=receipt" -H "Authorization: Bearer $PROSEND_API_KEY"
+curl https://prosend.example.com/api/v1/emails/9d1c…/events -H "Authorization: Bearer $PROSEND_API_KEY"
+curl https://prosend.example.com/api/v1/me -H "Authorization: Bearer $PROSEND_API_KEY"
+```
+
+### Behaviour to rely on
+
+- **`202` means queued, not delivered.** `accepted` means the provider took the email; only `delivered` (from provider webhooks) confirms delivery.
+- **Retry safely with `Idempotency-Key`.** Repeating a request with the same key and body within 24 hours returns the original response, with the header `Idempotent-Replayed: true`, and sends nothing new. The same key with a different body is refused (`422 idempotency_key_reused`).
+- **The same rules as the panel apply:** suppressed addresses and, for marketing, recipients without consent are refused (`recipient_not_eligible`); templates must be active and of the same purpose; HTML is sanitised; marketing email gets the unsubscribe footer and headers.
+- **Errors** always look like `{"error": {"code": "missing_scope", "message": "…", "request_id": "req_…"}}`. Build on the `code`; the message may change. Quote the `request_id` (also in the `X-Request-Id` header) when asking for help.
+- **Rate limits** return `429` with `Retry-After`. Twenty failed authentication attempts from one IP within 10 minutes block that IP for the rest of the window.
+
+Every request is logged (method, path, status, duration, IP, error code; never headers or bodies) and counted per key per day, shown on the key's page.
+
+## Data retention
+
+`prosend:prune` runs daily at 02:30 and deletes, in batches:
+
+| Data | Kept for | Setting |
+| --- | --- | --- |
+| Email bodies, attachments, and per-send variables | 90 days (the message record stays) | `PROSEND_RETAIN_BODIES_DAYS` |
+| Email messages and their events | 13 months | `PROSEND_RETAIN_MESSAGES_MONTHS` |
+| API request logs | 30 days | `PROSEND_RETAIN_API_LOGS_DAYS` |
+| API usage counts | 13 months | `PROSEND_RETAIN_API_USAGE_MONTHS` |
+| Audit logs | 24 months | `PROSEND_RETAIN_AUDIT_MONTHS` |
+
+Messages still queued, retrying, or sending are never pruned.
 
 ## Configuration
 
@@ -100,9 +215,10 @@ Tests never contact a real provider. `Tests\Fakes\FakeMailProviderDriver` record
 
 ## Not built yet
 
-Phase 1 covers the workflows above. Planned next:
+Phase 3 is being built in milestones; the approved plan is in [docs/specs/phase-3.md](docs/specs/phase-3.md). The sending API (milestone 1) is above. Still to come:
 
-- Email templates with versions and sample templates; segments; contact import preview.
-- Domain authentication checks (SPF, DKIM, DMARC lookups) and Brevo sender verification through its API.
-- A warm-up planner driven by real sending history, and deliverability reports.
-- API keys, outgoing webhooks, automation, additional providers (Resend, Mailjet, SMTP2GO, Amazon SES), and fallback between providers.
+- API endpoints for contacts, lists, and campaigns.
+- Outgoing webhooks, so your applications learn about deliveries and bounces without polling.
+- Two-person approval for contact imports, with a preview before processing.
+- Automation workflows.
+- Additional providers (Resend, Mailjet, SMTP2GO, Amazon SES) and fallback between providers.

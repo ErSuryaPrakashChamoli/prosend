@@ -1,0 +1,355 @@
+openapi: 3.1.0
+info:
+  title: ProSend API
+  version: "1.0.0"
+  description: |
+    Send transactional email through ProSend and read its delivery status, without handling SMTP credentials.
+
+    Authenticate with an API key created by an administrator under Infrastructure > API keys:
+    `Authorization: Bearer psk_live_...`. Keys in URLs are refused. Test keys (`psk_test_...`) validate and
+    record requests exactly like live keys but never send.
+
+    Every error uses one envelope: `{"error": {"code", "message", "fields"?, "request_id"}}`. Codes are stable;
+    messages may change. Every response carries `X-Request-Id`.
+
+    A `202` from `POST /emails` means queued. Read the status, or subscribe to webhooks (M2), to learn what happened.
+    "accepted" means the provider took the message; only "delivered" confirms delivery.
+servers:
+  - url: "{baseUrl}/api/v1"
+    variables:
+      baseUrl:
+        default: https://prosend.example.com
+security:
+  - apiKey: []
+paths:
+  /me:
+    get:
+      summary: Describe the calling API key
+      operationId: getMe
+      responses:
+        "200":
+          description: The key's settings and remaining allowance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ApiKeyInfo" }
+                  meta: { $ref: "#/components/schemas/Meta" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /emails:
+    post:
+      summary: Send an email
+      description: |
+        Queues one message per recipient (1 to 50). Requires scope `emails:send`; marketing email also needs
+        `emails:send_marketing`. The From address must be a sender identity allowed for the key. Suppressed
+        recipients, and recipients without consent for marketing, are refused with `recipient_not_eligible`.
+      operationId: sendEmail
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendEmailRequest" }
+            example:
+              from: billing@acme.test
+              to: [{ email: jane@example.com, name: Jane Doe }]
+              purpose: transactional
+              template_id: 12
+              variables: { order_number: "1042", action_url: "https://acme.test/orders/1042" }
+              tags: [receipt]
+              metadata: { order_id: "1042" }
+      responses:
+        "202":
+          description: Queued. With a test key, `status` is `simulated` and nothing is sent.
+          headers:
+            Idempotent-Replayed:
+              description: "`true` when this is the stored response of an earlier request with the same Idempotency-Key"
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        to: { type: string, format: email }
+                        status: { type: string, examples: [queued, simulated] }
+                  meta:
+                    allOf:
+                      - $ref: "#/components/schemas/Meta"
+                      - type: object
+                        properties:
+                          idempotent_replay: { type: boolean }
+                          test_mode: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    get:
+      summary: List emails
+      description: Emails sent by this key, newest first. With scope `emails:read_all`, every email. Cursor-paginated.
+      operationId: listEmails
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/EmailStatus" } }
+        - { name: tag, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string, format: email } }
+        - { name: created_after, in: query, schema: { type: string, format: date-time } }
+        - { name: created_before, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: A page of emails
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Email" } }
+                  meta:
+                    type: object
+                    properties:
+                      next_cursor: { type: [string, "null"] }
+                      prev_cursor: { type: [string, "null"] }
+                      per_page: { type: integer }
+                      request_id: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /emails/{id}:
+    get:
+      summary: Get an email's status
+      operationId: getEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The email
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Email" }
+                  meta: { $ref: "#/components/schemas/Meta" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /emails/{id}/events:
+    get:
+      summary: Get an email's event history
+      operationId: listEmailEvents
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Events, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/EmailEvent" } }
+                  meta: { $ref: "#/components/schemas/Meta" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: "ProSend API key: psk_live_<12 characters>_<40 characters>, or psk_test_..."
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: |
+        1 to 255 characters, unique per logical request. Retrying with the same key and body returns the original
+        response without sending again, for 24 hours. The same key with a different body returns 422
+        `idempotency_key_reused`; while the first request is running, 409 `idempotency_in_progress`.
+      schema: { type: string, minLength: 1, maxLength: 255 }
+  schemas:
+    Meta:
+      type: object
+      properties:
+        request_id: { type: string, examples: [req_01jd9m5q8z...] }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              examples:
+                - missing_api_key
+                - invalid_api_key
+                - revoked_api_key
+                - expired_api_key
+                - key_in_url
+                - ip_not_allowed
+                - missing_scope
+                - sender_not_allowed
+                - recipient_not_eligible
+                - template_not_available
+                - template_variables_missing
+                - validation_failed
+                - idempotency_key_reused
+                - idempotency_in_progress
+                - invalid_idempotency_key
+                - daily_send_limit_reached
+                - rate_limited
+                - too_many_failed_attempts
+                - invalid_json
+                - payload_too_large
+                - not_found
+                - server_error
+            message: { type: string }
+            fields:
+              type: object
+              additionalProperties: { type: array, items: { type: string } }
+            request_id: { type: string }
+    SendEmailRequest:
+      type: object
+      required: [from, to, purpose]
+      properties:
+        from: { type: string, format: email, description: An allowed sender identity }
+        to:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: object
+            required: [email]
+            properties:
+              email: { type: string, format: email }
+              name: { type: string, maxLength: 255 }
+        cc: { type: array, maxItems: 10, items: { type: string, format: email }, description: Only with exactly one `to` }
+        bcc: { type: array, maxItems: 10, items: { type: string, format: email }, description: Only with exactly one `to` }
+        reply_to: { type: string, format: email }
+        purpose: { type: string, enum: [transactional, marketing] }
+        template_id: { type: integer, description: An active template of the same purpose. Replaces subject/html/text when they are omitted. }
+        subject: { type: string, maxLength: 255, description: Required without template_id }
+        html: { type: string, description: Required without template_id. Sanitised before sending. }
+        text: { type: string, description: Plain-text version; generated from the HTML when omitted }
+        variables:
+          type: object
+          maxProperties: 50
+          description: Values for {{ name }} placeholders in this send only. Names use lowercase letters, numbers and underscores. Values are escaped.
+          additionalProperties: { type: [string, number, boolean] }
+        tags: { type: array, maxItems: 10, items: { type: string, pattern: "^[a-z0-9_-]{1,50}$" } }
+        metadata:
+          type: object
+          maxProperties: 20
+          description: Returned in status responses and webhooks. Values are stored as strings.
+          additionalProperties: { type: [string, number, boolean] }
+        scheduled_at: { type: string, format: date-time, description: Up to 30 days ahead }
+        attachments:
+          type: array
+          maxItems: 5
+          items:
+            type: object
+            required: [filename, content, content_type]
+            properties:
+              filename: { type: string }
+              content: { type: string, contentEncoding: base64 }
+              content_type:
+                type: string
+                enum: [application/pdf, image/png, image/jpeg, image/gif, text/plain, text/csv, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet]
+    EmailStatus:
+      type: string
+      enum: [queued, deferred, sending, unknown, accepted, soft_bounced, delivered, failed, bounced, complained, suppressed, cancelled, simulated]
+    Email:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        object: { type: string, const: email }
+        from: { type: string, format: email }
+        to: { type: object, properties: { email: { type: string }, name: { type: [string, "null"] } } }
+        cc: { type: array, items: { type: string } }
+        bcc: { type: array, items: { type: string } }
+        subject: { type: string }
+        purpose: { type: string, enum: [transactional, marketing] }
+        source: { type: string, enum: [compose, campaign, api, test] }
+        status: { $ref: "#/components/schemas/EmailStatus" }
+        status_description: { type: string }
+        template_id: { type: [integer, "null"] }
+        campaign_id: { type: [integer, "null"] }
+        tags: { type: array, items: { type: string } }
+        metadata: { type: object, additionalProperties: { type: string } }
+        attempts: { type: integer }
+        error:
+          type: [object, "null"]
+          properties:
+            code: { type: [string, "null"] }
+            message: { type: string }
+            retryable: { type: boolean }
+        scheduled_at: { type: [string, "null"], format: date-time }
+        queued_at: { type: [string, "null"], format: date-time }
+        accepted_at: { type: [string, "null"], format: date-time }
+        delivered_at: { type: [string, "null"], format: date-time }
+        failed_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+    EmailEvent:
+      type: object
+      properties:
+        id: { type: integer }
+        object: { type: string, const: email_event }
+        type: { type: string, examples: [queued, accepted, delivered, bounced, complained, unsubscribed, opened, clicked, failed] }
+        source: { type: string, enum: [application, brevo_webhook, recipient] }
+        recipient: { type: [string, "null"] }
+        details: { type: object }
+        occurred_at: { type: string, format: date-time }
+    ApiKeyInfo:
+      type: object
+      properties:
+        object: { type: string, const: api_key }
+        name: { type: string }
+        key: { type: string, description: Masked, for example psk_live_Ab12Cd34Ef56_…wxyz }
+        mode: { type: string, enum: [live, test] }
+        scopes: { type: array, items: { type: string, enum: ["emails:send", "emails:send_marketing", "emails:read", "emails:read_all"] } }
+        allowed_senders: { type: array, items: { type: string, format: email } }
+        rate_limit_per_minute: { type: integer }
+        daily_send_limit: { type: [integer, "null"] }
+        emails_queued_today: { type: integer }
+        daily_sends_remaining: { type: [integer, "null"] }
+        expires_at: { type: [string, "null"], format: date-time }
+  responses:
+    BadRequest:
+      description: Malformed JSON or an invalid Idempotency-Key header
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unauthorized:
+      description: Missing, invalid, expired or revoked key, or a key in the URL
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: Missing scope, sender not allowed, or IP not allowed
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Not found, or not visible to this key
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Conflict:
+      description: A request with this Idempotency-Key is still running; retry after `Retry-After` seconds
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    PayloadTooLarge:
+      description: Body larger than 10 MB
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unprocessable:
+      description: Validation failed, or a business rule refused the send
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    RateLimited:
+      description: Per-minute or daily limit reached; see `Retry-After`
+      headers:
+        Retry-After: { schema: { type: integer } }
+        X-RateLimit-Limit: { schema: { type: integer } }
+        X-RateLimit-Remaining: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
