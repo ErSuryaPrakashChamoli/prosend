@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\AvatarProviders\InitialsAvatarProvider;
 use App\Filament\Pages\Dashboard;
 use App\Filament\Pages\Tenancy\EditClientSettings;
 use App\Http\Controllers\OAuthMailboxController;
@@ -58,6 +59,7 @@ class AdminPanelProvider extends PanelProvider
             ->brandLogo(fn () => view('filament.admin.logo'))
             ->brandLogoHeight('2rem')
             ->favicon(asset('favicon.svg'))
+            ->defaultAvatarProvider(InitialsAvatarProvider::class)
             ->viteTheme('resources/css/filament/admin/theme.css')
             ->colors([
                 'primary' => self::BRAND_COLOR,

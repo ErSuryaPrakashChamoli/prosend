@@ -9,104 +9,211 @@
  * Filament components are restyled only through their documented CSS hook classes (fi-*), so the
  * markup stays Filament's own and upgrades keep working. Colours come from the panel palettes
  * (primary = ProSend blue, gray = zinc), so every rule below works in light and dark mode.
+ *
+ * Filament ships its styles in cascade layers and these rules are unlayered, so they win without
+ * extra specificity. The flip side: a property set here also beats Filament's state rules (hover,
+ * active, disabled), so any state that changes a property set here is restyled here too.
+ *
+ * Layout: the sidebar and topbar sit on a tinted canvas, and on desktop the page content is a
+ * raised panel inset from it.
  */
 
-/* Canvas and typography */
+/* Canvas, typography and scrollbars */
 
 .fi-body {
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-    background-image: radial-gradient(
-        64rem 28rem at 85% -8rem,
-        color-mix(in oklab, var(--color-primary-500) 9%, transparent),
-        transparent 70%
-    );
-    background-repeat: no-repeat;
-    background-attachment: fixed;
+    scrollbar-color: color-mix(in oklab, var(--color-gray-500) 35%, transparent) transparent;
 
-    @apply bg-gray-50 dark:bg-gray-950;
+    @apply bg-gray-100 dark:bg-gray-950;
+}
+
+.fi-body,
+.fi-body * {
+    scrollbar-width: thin;
+}
+
+.dark .fi-body {
+    scrollbar-color: color-mix(in oklab, var(--color-gray-400) 30%, transparent) transparent;
 }
 
 ::selection {
     @apply bg-primary-500/20 text-gray-950 dark:text-white;
 }
 
-/* Topbar: frosted glass. The blur sits on a pseudo-element so dropdowns inside the topbar keep their positioning. */
+/* Main panel: on desktop the page content is a raised surface inset from the canvas. */
 
-.fi-topbar {
-    @apply relative bg-transparent shadow-none ring-0;
+.fi-main-ctn {
+    @apply bg-gray-50 dark:bg-gray-950;
+}
 
-    &::before {
-        content: '';
-
-        @apply absolute inset-0 -z-10 border-b border-gray-950/[0.06] bg-white/75 backdrop-blur-xl backdrop-saturate-150;
+@media (width >= 64rem) {
+    .fi-body .fi-layout > .fi-main-ctn {
+        @apply me-2 mb-2 min-h-[calc(100dvh-var(--topbar-height)-0.5rem)] rounded-2xl bg-white shadow-[0_1px_2px_rgb(0_0_0/0.04),0_2px_8px_-2px_rgb(0_0_0/0.04)] ring-1 ring-gray-950/[0.07] dark:bg-gray-900/45 dark:shadow-none dark:ring-white/[0.07];
     }
 }
 
-/* Tailwind's dark: variant cannot follow a pseudo-element, so pseudo-element dark styles use .dark directly. */
-.dark .fi-topbar::before {
-    @apply border-white/[0.06] bg-gray-950/70;
+/* Topbar: shares the canvas colour so the sidebar, topbar and panel read as one frame. */
+
+.fi-topbar {
+    @apply border-b border-gray-950/[0.06] bg-gray-100 shadow-none ring-0 lg:border-transparent dark:border-white/[0.06] dark:bg-gray-950 dark:lg:border-transparent;
+
+    & .fi-topbar-end {
+        @apply gap-x-3;
+    }
+}
+
+.fi-global-search-field .fi-input-wrp {
+    @apply bg-white shadow-none ring-gray-950/[0.08] lg:w-72 dark:bg-white/[0.04] dark:ring-white/[0.08];
+}
+
+.fi-global-search-field .fi-input {
+    @apply placeholder:text-gray-400 dark:placeholder:text-gray-500;
+}
+
+.fi-user-avatar,
+.fi-tenant-avatar {
+    @apply ring-1 ring-gray-950/[0.08] dark:ring-white/10;
 }
 
 /* Sidebar */
 
+/* The mobile drawer also uses the canvas colour, so the raised active chip stands out from it. */
 .fi-sidebar {
-    @apply lg:border-e lg:border-gray-950/[0.06] lg:bg-white/60 dark:lg:border-white/[0.06] dark:lg:bg-gray-900/30;
+    @apply bg-gray-100 lg:bg-transparent dark:bg-gray-950 dark:lg:bg-transparent;
+}
+
+.fi-body-has-topbar .fi-sidebar-header {
+    @apply border-b border-gray-950/[0.06] bg-gray-100 shadow-none ring-0 dark:border-white/[0.06] dark:bg-gray-950;
+}
+
+/* In the collapsed desktop rail the client switcher is just its avatar, in line with the item icons. */
+@media (width >= 64rem) {
+    .fi-body-has-sidebar-collapsible-on-desktop .fi-sidebar:not(.fi-sidebar-open) {
+        & .fi-sidebar-header-controls {
+            @apply px-3;
+        }
+
+        & .fi-tenant-menu-trigger {
+            @apply bg-transparent p-1.5 shadow-none ring-0 hover:bg-gray-950/[0.045] dark:bg-transparent dark:hover:bg-white/[0.05];
+        }
+    }
+}
+
+.fi-sidebar-header-controls {
+    @apply px-3 pt-4 after:hidden;
+
+    & .fi-tenant-menu {
+        @apply mx-0;
+    }
+}
+
+.fi-tenant-menu-trigger {
+    @apply rounded-xl bg-white p-2 shadow-[0_1px_2px_rgb(0_0_0/0.05)] ring-1 ring-gray-950/[0.07] hover:bg-white hover:ring-gray-950/[0.12] focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-primary-600 dark:bg-white/[0.04] dark:shadow-none dark:ring-white/[0.08] dark:hover:bg-white/[0.07] dark:hover:ring-white/[0.14] dark:focus-visible:ring-primary-500;
+
+    & .fi-tenant-avatar {
+        @apply rounded-lg;
+    }
+
+    & .fi-tenant-menu-trigger-current-tenant-label {
+        @apply text-[0.6875rem] font-medium text-gray-500 dark:text-gray-400;
+    }
+
+    & .fi-tenant-menu-trigger-tenant-name {
+        @apply font-semibold text-gray-950 dark:text-white;
+    }
 }
 
 .fi-sidebar-nav {
-    @apply gap-y-6 px-4 py-6;
+    @apply gap-y-5 px-3 py-5;
+
+    /* The scrollbar only shows while the pointer is over the navigation, as in native sidebars. */
+    scrollbar-color: transparent transparent;
+
+    &:hover,
+    &:focus-within {
+        scrollbar-color: color-mix(in oklab, var(--color-gray-500) 35%, transparent) transparent;
+    }
 }
 
 .fi-sidebar-nav-groups {
-    @apply gap-y-6;
+    @apply mx-0 gap-y-5;
+}
+
+.fi-sidebar-group {
+    @apply gap-y-0.5;
+}
+
+.fi-sidebar-group-btn {
+    @apply px-2.5 py-1;
 }
 
 .fi-sidebar-group-label {
-    @apply text-[0.6875rem] font-semibold tracking-[0.08em] text-gray-400 uppercase dark:text-gray-500;
+    @apply text-[0.6875rem] leading-5 font-semibold tracking-[0.07em] text-gray-500 uppercase dark:text-gray-500;
+}
+
+/* Collapse chevrons appear on hover, and stay visible on a collapsed group so it is obvious it holds more. */
+@media (hover: hover) {
+    .fi-sidebar-group:not(.fi-collapsed) .fi-sidebar-group-collapse-btn {
+        @apply opacity-0 transition-opacity duration-150;
+    }
+
+    .fi-sidebar-group-btn:hover .fi-sidebar-group-collapse-btn,
+    .fi-sidebar-group .fi-sidebar-group-collapse-btn:focus-visible {
+        @apply opacity-100;
+    }
+}
+
+.fi-sidebar-group-items {
+    @apply gap-y-px;
 }
 
 .fi-sidebar-item-btn {
-    @apply rounded-lg px-2.5 py-2;
+    @apply gap-x-2.5 rounded-lg px-2.5 py-1.5;
+
+    & > .fi-icon {
+        @apply size-[1.125rem] text-gray-400 dark:text-gray-500;
+    }
 
     & > .fi-sidebar-item-label {
-        @apply text-gray-600 dark:text-gray-300;
+        @apply text-sm font-medium text-gray-600 dark:text-gray-400;
     }
 }
 
 .fi-sidebar-item.fi-sidebar-item-has-url > .fi-sidebar-item-btn {
-    @apply hover:bg-gray-950/[0.04] focus-visible:bg-gray-950/[0.04] dark:hover:bg-white/[0.05] dark:focus-visible:bg-white/[0.05];
+    @apply hover:bg-gray-950/[0.045] focus-visible:bg-gray-950/[0.045] dark:hover:bg-white/[0.05] dark:focus-visible:bg-white/[0.05];
 
     &:hover > .fi-sidebar-item-label {
         @apply text-gray-950 dark:text-white;
     }
+
+    &:hover > .fi-icon {
+        @apply text-gray-500 dark:text-gray-400;
+    }
 }
 
+/* The active page is a raised chip, like a selected segment. */
 .fi-sidebar-item.fi-active > .fi-sidebar-item-btn {
-    @apply bg-primary-50 ring-1 ring-primary-600/10 ring-inset dark:bg-primary-400/10 dark:ring-primary-400/15;
+    @apply bg-white shadow-[0_1px_2px_rgb(0_0_0/0.06),0_1px_1px_rgb(0_0_0/0.03)] ring-1 ring-gray-950/[0.06] hover:bg-white dark:bg-white/[0.08] dark:shadow-none dark:ring-white/[0.06] dark:hover:bg-white/[0.1];
 
-    &::before {
-        content: '';
-
-        @apply absolute inset-y-2 -start-2 w-[3px] rounded-e-full bg-primary-600;
+    & > .fi-sidebar-item-label,
+    &:hover > .fi-sidebar-item-label {
+        @apply font-semibold text-gray-950 dark:text-white;
     }
 
-    & > .fi-sidebar-item-label {
-        @apply font-semibold text-primary-700 dark:text-primary-300;
-    }
-
-    & > .fi-icon {
+    & > .fi-icon,
+    &:hover > .fi-icon {
         @apply text-primary-600 dark:text-primary-400;
     }
 }
 
-.dark .fi-sidebar-item.fi-active > .fi-sidebar-item-btn::before {
-    @apply bg-primary-400;
+.fi-sidebar-footer {
+    @apply border-gray-950/[0.06] dark:border-white/[0.06];
 }
 
 /* Page header */
 
 .fi-header-heading {
-    @apply tracking-tight;
+    @apply text-[1.625rem] leading-tight font-semibold tracking-[-0.025em];
 }
 
 .fi-header-subheading {
@@ -117,17 +224,43 @@
     @apply text-[0.8125rem];
 }
 
+.fi-breadcrumbs-item-label {
+    @apply font-medium text-gray-500 dark:text-gray-400;
+}
+
 /* Cards: sections, stats, charts and tables share one surface */
 
-.fi-section:not(.fi-section-not-contained),
+.fi-section:not(.fi-section-not-contained):not(.fi-aside),
+.fi-section.fi-aside > .fi-section-content-ctn,
 .fi-ta-ctn,
-.fi-wi-stats-overview-stat,
-.fi-tabs:not(.fi-contained) {
-    @apply rounded-2xl shadow-[0_1px_2px_rgb(0_0_0/0.04),0_4px_16px_-8px_rgb(0_0_0/0.08)] ring-gray-950/[0.07] dark:bg-gray-900/70 dark:shadow-none dark:ring-white/[0.08];
+.fi-wi-stats-overview-stat {
+    @apply rounded-xl bg-white shadow-[0_1px_2px_rgb(0_0_0/0.04)] ring-1 ring-gray-950/[0.08] dark:bg-gray-900 dark:shadow-none dark:ring-white/[0.08];
+}
+
+.fi-section:not(.fi-section-not-contained):not(.fi-aside) {
+    &.fi-secondary {
+        @apply bg-gray-50 dark:bg-white/[0.03];
+    }
+
+    &:not(.fi-compact) > .fi-section-header {
+        @apply px-6 py-3.5;
+    }
+
+    &.fi-section-has-header:not(.fi-collapsed) > .fi-section-content-ctn {
+        @apply border-gray-950/[0.06] dark:border-white/[0.06];
+    }
+
+    & > .fi-section-content-ctn > .fi-section-footer {
+        @apply border-gray-950/[0.06] bg-gray-50/60 dark:border-white/[0.06] dark:bg-white/[0.02];
+    }
 }
 
 .fi-section-header-heading {
-    @apply tracking-tight;
+    @apply text-[0.9375rem] font-semibold tracking-[-0.01em];
+}
+
+.fi-section-header-description {
+    @apply text-[0.8125rem] leading-5 text-gray-500 dark:text-gray-400;
 }
 
 /*
@@ -143,57 +276,189 @@
 /* Stats */
 
 .fi-wi-stats-overview-stat {
-    @apply transition duration-150;
+    @apply p-5 transition duration-150;
+
+    & .fi-wi-stats-overview-stat-content {
+        @apply gap-y-1.5;
+    }
+
+    & .fi-wi-stats-overview-stat-label {
+        @apply text-[0.8125rem] font-medium text-gray-500 dark:text-gray-400;
+    }
+
+    & .fi-wi-stats-overview-stat-value {
+        @apply text-[1.75rem] leading-9 font-semibold tracking-[-0.03em];
+    }
+
+    & .fi-wi-stats-overview-stat-description {
+        @apply text-[0.8125rem];
+    }
 }
 
 a.fi-wi-stats-overview-stat {
-    @apply hover:-translate-y-px hover:ring-primary-600/25 dark:hover:ring-primary-400/30;
-}
-
-.fi-wi-stats-overview-stat-label {
-    @apply text-xs font-semibold tracking-[0.06em] text-gray-500 uppercase dark:text-gray-400;
-}
-
-.fi-wi-stats-overview-stat-value {
-    @apply tracking-tighter;
+    @apply hover:ring-primary-600/30 hover:shadow-[0_1px_2px_rgb(0_0_0/0.04),0_6px_16px_-8px_rgb(0_0_0/0.12)] focus-visible:ring-2 focus-visible:ring-primary-600 dark:hover:ring-primary-400/35 dark:focus-visible:ring-primary-500;
 }
 
 /* Tables */
 
-.fi-ta-header-cell {
-    @apply bg-gray-50/80 text-xs font-semibold tracking-[0.04em] text-gray-500 uppercase dark:bg-white/[0.02] dark:text-gray-400;
+.fi-ta-ctn {
+    & .fi-ta-header,
+    & .fi-ta-header-toolbar,
+    & .fi-ta-filters-above-content-ctn,
+    & .fi-pagination-ctn,
+    & .fi-ta-footer {
+        @apply border-gray-950/[0.06] dark:border-white/[0.06];
+    }
+
+    & .fi-ta-header-toolbar {
+        @apply py-2.5;
+    }
 }
 
-.fi-ta-row {
-    @apply transition-colors duration-75 hover:bg-gray-50/70 dark:hover:bg-white/[0.02];
+.fi-ta-header-heading {
+    @apply text-[0.9375rem] font-semibold tracking-[-0.01em];
+}
+
+.fi-ta-header-cell {
+    @apply bg-gray-50/80 py-2.5 text-xs font-medium text-gray-500 dark:bg-white/[0.02] dark:text-gray-400;
+
+    & .fi-ta-header-cell-sort-btn {
+        @apply text-xs font-medium;
+    }
 }
 
 .fi-ta-table {
     @apply tabular-nums;
+
+    & > thead > tr {
+        @apply border-b border-gray-950/[0.06] dark:border-white/[0.06];
+    }
+
+    & > tbody {
+        @apply divide-gray-950/[0.05] dark:divide-white/[0.05];
+    }
 }
 
-/* Badges, inputs, modals and dropdowns */
+.fi-ta-row {
+    @apply transition-colors duration-75 hover:bg-gray-50/80 dark:hover:bg-white/[0.02];
+
+    /* Slightly denser rows than Filament's default, so more of a list fits on screen. */
+    & :is(.fi-ta-text, .fi-ta-icon, .fi-ta-checkbox, .fi-ta-color, .fi-ta-image, .fi-ta-text-input):not(.fi-inline) {
+        @apply sm:py-3;
+    }
+}
+
+.fi-ta-empty-state-icon-bg {
+    @apply bg-gray-100 ring-1 ring-gray-950/[0.05] dark:bg-white/[0.06] dark:ring-white/[0.06];
+}
+
+/* Tabs above a table or form: a left-aligned segmented control */
+
+.fi-tabs:not(.fi-contained):not(.fi-vertical) {
+    @apply mx-0 w-fit gap-x-0.5 rounded-xl bg-gray-950/[0.045] p-1 shadow-none ring-0 dark:bg-white/[0.05];
+
+    & .fi-tabs-item {
+        @apply rounded-lg px-3 py-1.5 hover:bg-transparent focus-visible:bg-transparent;
+
+        &:hover .fi-tabs-item-label {
+            @apply text-gray-950 dark:text-white;
+        }
+
+        &.fi-active {
+            @apply bg-white shadow-[0_1px_2px_rgb(0_0_0/0.08)] ring-1 ring-gray-950/[0.06] hover:bg-white dark:bg-white/[0.1] dark:shadow-none dark:ring-white/[0.06] dark:hover:bg-white/[0.1];
+
+            & .fi-tabs-item-label {
+                @apply text-gray-950 dark:text-white;
+            }
+
+            & > .fi-icon {
+                @apply text-primary-600 dark:text-primary-400;
+            }
+        }
+    }
+}
+
+.fi-tabs.fi-contained {
+    @apply border-gray-950/[0.06] dark:border-white/[0.06];
+}
+
+.fi-tabs-item-label {
+    @apply text-[0.8125rem];
+}
+
+/* Badges */
 
 .fi-badge {
-    @apply rounded-full;
+    @apply rounded-md;
+
+    &.fi-size-sm {
+        @apply px-2 tracking-normal;
+    }
 }
+
+/* Buttons: solid colours get a soft top highlight and a hairline shadow, outlined greys a lift */
+
+.fi-btn.fi-color:not(.fi-outlined):not(label):not([aria-pressed]) {
+    @apply shadow-[inset_0_1px_0_rgb(255_255_255/0.14),0_1px_2px_rgb(0_0_0/0.12)] dark:shadow-[inset_0_1px_0_rgb(255_255_255/0.1)];
+}
+
+.fi-btn:not(.fi-color):not(.fi-outlined) {
+    @apply shadow-[0_1px_2px_rgb(0_0_0/0.05)] ring-gray-950/[0.1] dark:shadow-none dark:ring-white/[0.12];
+}
+
+/* Inputs: a hairline ring, and a soft halo around the focus ring */
 
 .fi-input-wrp {
-    @apply transition-shadow;
+    @apply shadow-[0_1px_2px_rgb(0_0_0/0.04)] ring-gray-950/[0.1] transition-shadow duration-150 dark:shadow-none dark:ring-white/[0.12];
+
+    &:not(.fi-disabled):not(:has(.fi-ac-action:focus)) {
+        @apply focus-within:ring-2 focus-within:ring-primary-600 focus-within:shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-primary-500)_14%,transparent)] dark:focus-within:ring-primary-500;
+
+        &.fi-invalid {
+            @apply focus-within:ring-danger-600 focus-within:shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-danger-500)_14%,transparent)] dark:focus-within:ring-danger-500;
+        }
+    }
+
+    &.fi-disabled {
+        @apply bg-gray-50 shadow-none dark:bg-transparent;
+    }
+
+    &.fi-invalid {
+        @apply ring-danger-600 dark:ring-danger-500;
+    }
 }
 
-.fi-modal-window {
-    @apply rounded-2xl;
+.fi-fo-field-wrp-helper-text,
+.fi-sc-text {
+    @apply text-[0.8125rem];
+}
+
+/* Modals, dropdowns and notifications */
+
+.fi-modal > .fi-modal-close-overlay {
+    @apply bg-gray-950/40 backdrop-blur-[2px] dark:bg-gray-950/70;
+}
+
+.fi-modal:not(.fi-modal-slide-over):not(.fi-width-screen) > .fi-modal-window-ctn > .fi-modal-window {
+    @apply rounded-2xl ring-gray-950/[0.08] dark:ring-white/[0.08];
+}
+
+.fi-modal-heading {
+    @apply tracking-[-0.01em];
 }
 
 .fi-dropdown-panel {
-    @apply rounded-xl shadow-lg shadow-gray-950/10;
+    @apply rounded-xl shadow-[0_10px_32px_-8px_rgb(0_0_0/0.18),0_2px_6px_-2px_rgb(0_0_0/0.06)] ring-gray-950/[0.08] dark:ring-white/[0.1];
+}
+
+.fi-no-notification {
+    @apply rounded-xl;
 }
 
 /* Sign-in and other simple pages: a branded backdrop behind the card */
 
 .fi-simple-layout {
-    @apply relative isolate overflow-hidden;
+    @apply relative isolate overflow-hidden bg-gray-50 dark:bg-gray-950;
 
     &::before {
         content: '';
@@ -218,6 +483,7 @@ a.fi-wi-stats-overview-stat {
     }
 }
 
+/* Tailwind's dark: variant cannot follow a pseudo-element, so pseudo-element dark styles use .dark directly. */
 .dark .fi-simple-layout::after {
     @apply opacity-25;
 
@@ -239,7 +505,8 @@ a.fi-wi-stats-overview-stat {
 @media (prefers-reduced-motion: reduce) {
     .fi-wi-stats-overview-stat,
     .fi-ta-row,
-    .fi-input-wrp {
-        @apply transition-none hover:translate-y-0;
+    .fi-input-wrp,
+    .fi-sidebar-group-collapse-btn {
+        @apply transition-none;
     }
 }
