@@ -140,6 +140,7 @@ class DomainAuthenticator
             $found === [] => DnsCheckStatus::Missing,
             // Brevo's CNAME setup uses a pair of selectors; one without the other is incomplete.
             isset($found['brevo1']) xor isset($found['brevo2']) => isset($found['mail']) ? DnsCheckStatus::Found : DnsCheckStatus::Incomplete,
+            isset($found['rwmt1']) xor isset($found['rwmt2']) => DnsCheckStatus::Incomplete,
             default => DnsCheckStatus::Found,
         };
 

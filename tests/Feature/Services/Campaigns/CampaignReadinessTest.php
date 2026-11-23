@@ -2,6 +2,7 @@
 
 use App\Enums\AudienceType;
 use App\Enums\ConsentStatus;
+use App\Enums\EmailPurpose;
 use App\Models\Campaign;
 use App\Models\Contact;
 use App\Models\EmailTemplate;
@@ -45,3 +46,17 @@ it('asks for a segment when the audience type is segment but none is chosen', fu
 
     expect(app(CampaignReadiness::class)->assess($campaign)->blockingIssues)->toContain('Choose a segment.');
 });
+
+it('warns when a marketing campaign would go out without a postal address', function (EmailPurpose $purpose, ?string $postalAddress, bool $warns) {
+    config(['prosend.marketing.postal_address' => $postalAddress]);
+    Contact::factory()->consented()->create();
+    $campaign = Campaign::factory()->create(['purpose' => $purpose]);
+
+    $warnings = app(CampaignReadiness::class)->assess($campaign)->warnings;
+
+    expect(collect($warnings)->contains(fn (string $warning): bool => str_contains($warning, 'PROSEND_POSTAL_ADDRESS')))->toBe($warns);
+})->with([
+    'marketing without an address' => [EmailPurpose::Marketing, null, true],
+    'marketing with an address' => [EmailPurpose::Marketing, 'Acme Ltd, 1 High Street, London', false],
+    'transactional without an address' => [EmailPurpose::Transactional, null, false],
+]);

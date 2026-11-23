@@ -45,7 +45,7 @@ class EmailController extends ApiController
     {
         $apiKey = $this->apiKey($request);
         $idempotencyKey = $request->attributes->get('idempotency_key');
-        $replayed = $sendEmails->previouslyQueued($apiKey, $idempotencyKey);
+        $replayed = $sendEmails->recoverEarlierAttempt($apiKey, $idempotencyKey);
         $messages = $replayed->isNotEmpty() ? $replayed : $sendEmails->handle($request->validated(), $apiKey, $idempotencyKey);
 
         return response()->json([
@@ -55,7 +55,7 @@ class EmailController extends ApiController
                 'status' => $message->status->value,
             ])->values(),
             'meta' => $this->meta($request, ['idempotent_replay' => $replayed->isNotEmpty(), 'test_mode' => $apiKey->isTest()]),
-        ], 202);
+        ], 202, $replayed->isNotEmpty() ? ['Idempotent-Replayed' => 'true'] : []);
     }
 
     public function show(Request $request, EmailMessage $email): EmailResource

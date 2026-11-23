@@ -88,11 +88,13 @@ class ComposeEmail extends Page
                             ->helperText('Each address receives its own email, so recipients never see each other.'),
                         TagsInput::make('cc')
                             ->label('CC')
+                            ->placeholder('Optional')
                             ->splitKeys(['Tab', ',', ' '])
                             ->nestedRecursiveRules(['email:rfc'])
                             ->helperText('CC and BCC are only available when sending to one address.'),
                         TagsInput::make('bcc')
                             ->label('BCC')
+                            ->placeholder('Optional')
                             ->splitKeys(['Tab', ',', ' '])
                             ->nestedRecursiveRules(['email:rfc']),
                     ]),
@@ -106,8 +108,10 @@ class ComposeEmail extends Page
                             ->live(),
                         Select::make('sender_identity_id')
                             ->label('From')
-                            ->options(fn (): array => SenderIdentity::query()->usable()->orderBy('email')->get()
-                                ->mapWithKeys(fn (SenderIdentity $identity): array => [$identity->getKey() => "{$identity->name} <{$identity->email}>".($identity->isVerified() ? '' : ' (unverified)')])
+                            ->options(fn (): array => SenderIdentity::query()->usable()->with('smtpProvider')->orderBy('email')->get()
+                                ->mapWithKeys(fn (SenderIdentity $identity): array => [$identity->getKey() => "{$identity->name} <{$identity->email}>"
+                                    .($identity->isVerified() ? '' : ' (unverified)')
+                                    .($identity->smtpProvider->isSandbox() ? ' (sandbox: captured, not delivered)' : '')])
                                 ->all())
                             ->required()
                             ->live(),
@@ -238,9 +242,11 @@ class ComposeEmail extends Page
 
                     $notification = Notification::make()
                         ->title('Test email: '.$message->status->getLabel())
-                        ->body($message->error_message ?? 'Sent to '.$message->to_email.'.');
+                        ->body($message->error_message ?? ($message->status === MessageStatus::Captured
+                            ? 'Captured by the sandbox for inspection. It was not delivered to '.$message->to_email.'.'
+                            : 'Sent to '.$message->to_email.'.'));
 
-                    ($message->status === MessageStatus::Accepted ? $notification->success() : $notification->danger())->send();
+                    (in_array($message->status, [MessageStatus::Accepted, MessageStatus::Captured], true) ? $notification->success() : $notification->danger())->send();
                 }),
         ];
     }
@@ -313,6 +319,7 @@ class ComposeEmail extends Page
         $remaining = $provider?->remainingQuota();
 
         return trans_choice('{0} No recipients yet|{1} 1 email will be sent|[2,*] :count emails will be sent', $count, ['count' => $count])
-            .($remaining !== null ? '. '.Number::format($remaining).' sends left on '.$provider->name.'.' : '.');
+            .($remaining !== null ? '. '.Number::format($remaining).' sends left on '.$provider->name.'.' : '.')
+            .($provider?->isSandbox() ? " Sandbox: {$provider->name} captures the email for inspection; nobody receives it." : '');
     }
 }

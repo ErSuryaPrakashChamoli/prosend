@@ -15,7 +15,7 @@ class RetryEmailMessage
 
     public static function canRetry(EmailMessage $message): bool
     {
-        if ($message->campaign?->status === CampaignStatus::Cancelled) {
+        if ($message->campaign?->status === CampaignStatus::Cancelled || $message->contentWasPruned()) {
             return false;
         }
 
@@ -28,6 +28,10 @@ class RetryEmailMessage
      */
     public function handle(EmailMessage $message): void
     {
+        if ($message->contentWasPruned()) {
+            throw ValidationException::withMessages(['message' => 'The content of this email was deleted under the data retention policy, so it cannot be sent again.']);
+        }
+
         if (! static::canRetry($message)) {
             throw ValidationException::withMessages(['message' => 'Only temporary failures and messages with an unknown outcome can be retried.']);
         }

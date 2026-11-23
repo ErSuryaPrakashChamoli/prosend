@@ -33,7 +33,16 @@ class CampaignProgress extends StatsOverviewWidget
         $accepted = $count(...MessageStatus::acceptedByProvider());
         $delivered = $count(MessageStatus::Delivered);
 
+        $captured = $count(MessageStatus::Captured);
+
+        $sandboxStats = $captured > 0 ? [
+            Stat::make('Captured in sandbox', Number::format($captured))
+                ->description('Kept by a sandbox provider for inspection; not delivered to recipients')
+                ->color('warning'),
+        ] : [];
+
         return [
+            ...$sandboxStats,
             Stat::make('Recipients', Number::format($total))
                 ->description(Number::format($count(MessageStatus::Queued, MessageStatus::Deferred, MessageStatus::Sending)).' waiting to send'),
             Stat::make('Accepted by provider', Number::format($accepted))

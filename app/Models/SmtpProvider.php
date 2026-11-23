@@ -17,6 +17,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
+use LogicException;
 
 #[ObservedBy(SmtpProviderObserver::class)]
 #[Fillable(['name', 'type', 'host', 'port', 'encryption', 'username', 'password', 'api_key', 'daily_limit', 'monthly_limit', 'max_per_minute', 'priority', 'is_enabled'])]
@@ -34,6 +35,21 @@ class SmtpProvider extends Model
         'is_enabled' => true,
         'priority' => 100,
     ];
+
+    /**
+     * A provider never switches between sandbox and live sending, so email queued for one can never be
+     * handed to the other. Create a new provider instead.
+     */
+    protected static function booted(): void
+    {
+        static::updating(function (SmtpProvider $provider): void {
+            $original = ProviderType::tryFrom((string) $provider->getRawOriginal('type'));
+
+            if ($provider->isDirty('type') && $original !== null && $original->isSandbox() !== $provider->type->isSandbox()) {
+                throw new LogicException('A provider cannot switch between sandbox and live sending. Create a new provider instead.');
+            }
+        });
+    }
 
     /**
      * @return array<string, string>
@@ -74,6 +90,14 @@ class SmtpProvider extends Model
     }
 
     /**
+     * @return HasMany<EmailMessageAttempt, $this>
+     */
+    public function sendAttempts(): HasMany
+    {
+        return $this->hasMany(EmailMessageAttempt::class);
+    }
+
+    /**
      * @param  Builder<self>  $query
      */
     #[Scope]
@@ -82,9 +106,44 @@ class SmtpProvider extends Model
         $query->where('is_enabled', true);
     }
 
+    /**
+     * Whether email sent through this provider is captured for inspection instead of delivered.
+     */
+    public function isSandbox(): bool
+    {
+        return $this->type->isSandbox();
+    }
+
+    /**
+     * Why this provider may not send in this environment, when it is a sandbox and sandboxes are turned off.
+     */
+    public function sandboxRefusal(): ?string
+    {
+        return $this->isSandbox() && ! config('prosend.providers.allow_sandbox')
+            ? "The provider {$this->name} is a sandbox, and sandbox providers are turned off in this environment (PROSEND_ALLOW_SANDBOX_PROVIDERS)."
+            : null;
+    }
+
+    /**
+     * Why this provider may not send right now: a sandbox where sandboxes are turned off, or a host that
+     * does not match the provider type, so sandbox and live sending can never be confused.
+     */
+    public function sendingRefusal(): ?string
+    {
+        $hostProblem = $this->type->hostProblem($this->host);
+
+        return $this->sandboxRefusal()
+            ?? ($hostProblem === null ? null : "The provider {$this->name} cannot send: {$hostProblem} Fix its host or type.");
+    }
+
+    /**
+     * Email this provider took since the given time, accepted or, for a sandbox, captured. Quotas count both.
+     */
     public function acceptedCountSince(CarbonInterface $since): int
     {
-        return $this->emailMessages()->where('accepted_at', '>=', $since)->count();
+        return $this->emailMessages()
+            ->where(fn (Builder $messages) => $messages->where('accepted_at', '>=', $since)->orWhere('captured_at', '>=', $since))
+            ->count();
     }
 
     public function remainingDailyQuota(): ?int

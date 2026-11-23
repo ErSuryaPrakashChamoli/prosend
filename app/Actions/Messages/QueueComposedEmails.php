@@ -182,6 +182,8 @@ class QueueComposedEmails
             $validator->errors()->add('sender_identity_id', 'This sender must be verified with the provider before it can send.');
         } elseif ($senderIdentity && ! $senderIdentity->smtpProvider->is_enabled) {
             $validator->errors()->add('sender_identity_id', "The provider {$senderIdentity->smtpProvider->name} is disabled.");
+        } elseif ($senderIdentity && ($sendingRefusal = $senderIdentity->smtpProvider->sendingRefusal()) !== null) {
+            $validator->errors()->add('sender_identity_id', $sendingRefusal);
         }
 
         $purpose = EmailPurpose::from($data['purpose'] instanceof EmailPurpose ? $data['purpose']->value : $data['purpose']);

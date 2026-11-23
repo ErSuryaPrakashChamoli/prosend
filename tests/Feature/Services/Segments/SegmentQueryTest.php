@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\ConsentStatus;
+use App\Enums\ContactStage;
 use App\Enums\EmailEventType;
 use App\Enums\SegmentMatch;
 use App\Models\Contact;
@@ -30,6 +31,21 @@ it('matches contacts by consent, tag, domain, company, and custom attribute', fu
     'unsafe attribute key' => [['type' => 'custom_attribute', 'data' => ['key' => 'plan") or 1=1 --', 'operator' => 'exists']], []],
     'wildcard domain' => [['type' => 'email_domain', 'data' => ['domain' => '%']], []],
     'unknown consent status' => [['type' => 'consent', 'data' => ['status' => 'maybe']], []],
+]);
+
+it('matches contacts by job title, industry, source, and stage', function (array $rule, array $expected) {
+    Contact::factory()->create(['email' => 'ann@acme.test', 'job_title' => 'Head of Operations', 'industry' => 'Logistics', 'source' => 'Trade show', 'stage' => ContactStage::Interested]);
+    Contact::factory()->create(['email' => 'bob@other.test', 'job_title' => null, 'industry' => 'Retail', 'source' => 'Website', 'stage' => ContactStage::New]);
+
+    expect(segmentEmails([$rule]))->toBe($expected);
+})->with([
+    'job title contains' => [['type' => 'job_title', 'data' => ['operator' => 'contains', 'value' => 'operations']], ['ann@acme.test']],
+    'job title empty' => [['type' => 'job_title', 'data' => ['operator' => 'is_empty']], ['bob@other.test']],
+    'industry contains' => [['type' => 'industry', 'data' => ['operator' => 'contains', 'value' => 'retail']], ['bob@other.test']],
+    'industry wildcard is literal' => [['type' => 'industry', 'data' => ['operator' => 'contains', 'value' => '%']], []],
+    'source not empty' => [['type' => 'source', 'data' => ['operator' => 'is_not_empty']], ['ann@acme.test', 'bob@other.test']],
+    'stage is any of' => [['type' => 'stage', 'data' => ['stages' => [ContactStage::Interested->value, ContactStage::Converted->value]]], ['ann@acme.test']],
+    'unknown stage' => [['type' => 'stage', 'data' => ['stages' => ['lost']]], []],
 ]);
 
 it('combines rules with all or any', function () {

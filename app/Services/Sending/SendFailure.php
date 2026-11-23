@@ -19,6 +19,7 @@ final readonly class SendFailure
         public string $summary,
         public ?string $code = null,
         public bool $retryable = false,
+        private ?bool $providerProblem = null,
     ) {}
 
     /**
@@ -55,11 +56,12 @@ final readonly class SendFailure
     }
 
     /**
-     * Whether the failure points at the provider connection rather than the individual message.
+     * Whether the failure points at the provider connection rather than the individual message. A driver
+     * can say so explicitly, for example when the provider is only throttling.
      */
     public function affectsProvider(): bool
     {
-        return $this->code === null || in_array((int) $this->code, self::AUTHENTICATION_CODES, true);
+        return $this->providerProblem ?? ($this->code === null || in_array((int) $this->code, self::AUTHENTICATION_CODES, true));
     }
 
     /**

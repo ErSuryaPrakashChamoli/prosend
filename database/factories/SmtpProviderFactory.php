@@ -41,6 +41,30 @@ class SmtpProviderFactory extends Factory
         ]);
     }
 
+    public function mailtrap(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'name' => 'Mailtrap '.fake()->unique()->word(),
+            'type' => ProviderType::Mailtrap,
+            'host' => 'live.smtp.mailtrap.io',
+            'port' => 587,
+            'username' => 'api',
+            'password' => fake()->sha1(),
+        ]);
+    }
+
+    public function mailtrapSandbox(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'name' => 'Mailtrap sandbox '.fake()->unique()->word(),
+            'type' => ProviderType::MailtrapSandbox,
+            'host' => 'sandbox.smtp.mailtrap.io',
+            'port' => 2525,
+            'username' => fake()->regexify('[a-f0-9]{14}'),
+            'password' => fake()->regexify('[a-f0-9]{14}'),
+        ]);
+    }
+
     public function dailyLimit(int $limit): static
     {
         return $this->state(fn (array $attributes) => [

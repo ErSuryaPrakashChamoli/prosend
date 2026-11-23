@@ -5,21 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex">
     <title>@yield('title') · {{ $senderName }}</title>
-    <style>
-        :root { color-scheme: light dark; --bg: #f4f4f5; --card: #ffffff; --text: #18181b; --muted: #52525b; --accent: #4f46e5; }
-        @media (prefers-color-scheme: dark) { :root { --bg: #09090b; --card: #18181b; --text: #f4f4f5; --muted: #a1a1aa; --accent: #818cf8; } }
-        body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
-        main { width: min(440px, calc(100% - 32px)); background: var(--card); border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgb(0 0 0 / 0.1); }
-        h1 { margin: 0 0 8px; font-size: 1.375rem; line-height: 1.3; }
-        p { margin: 0 0 16px; color: var(--muted); }
-        strong { color: var(--text); word-break: break-all; }
-        button { width: 100%; border: 0; border-radius: 8px; padding: 12px 16px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
-        button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-    </style>
+
+    @fonts
+
+    @if (file_exists(public_path('build/manifest.json')) || file_exists(public_path('hot')))
+        @vite('resources/css/app.css')
+    @endif
 </head>
-<body>
-    <main>
-        @yield('content')
-    </main>
+<body class="min-h-dvh bg-zinc-50 text-zinc-950 antialiased dark:bg-zinc-950 dark:text-white">
+    <div class="relative isolate flex min-h-dvh items-center justify-center px-4 py-16">
+        <div aria-hidden="true" class="absolute inset-x-0 top-0 -z-10 h-96 bg-[radial-gradient(42rem_20rem_at_50%_-6rem,color-mix(in_oklab,var(--color-brand-500)_16%,transparent),transparent_70%)]"></div>
+
+        <main class="w-full max-w-md rounded-3xl bg-white p-8 text-center shadow-[0_1px_2px_rgb(0_0_0/0.04),0_24px_48px_-24px_rgb(0_0_0/0.18)] ring-1 ring-zinc-950/[0.07] sm:p-10 dark:bg-zinc-900 dark:shadow-none dark:ring-white/10">
+            <p class="text-sm font-semibold text-brand-600 dark:text-brand-400">{{ $senderName }}</p>
+
+            @yield('content')
+        </main>
+    </div>
 </body>
 </html>

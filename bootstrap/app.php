@@ -30,6 +30,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'api.scope' => RequireApiScope::class,
         ]);
+
+        // A key without the scope is refused before the email is looked up, so it cannot tell which ids exist.
+        $middleware->prependToPriorityList(before: SubstituteBindings::class, prepend: RequireApiScope::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

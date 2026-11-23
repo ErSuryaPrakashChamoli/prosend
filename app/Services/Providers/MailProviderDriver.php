@@ -4,8 +4,10 @@ namespace App\Services\Providers;
 
 use App\Models\EmailMessage;
 use App\Models\SmtpProvider;
+use App\Services\Sending\SendFailure;
 use Illuminate\Contracts\Mail\Mailer;
 use Symfony\Component\Mailer\Exception\TransportExceptionInterface;
+use Throwable;
 
 interface MailProviderDriver
 {
@@ -29,4 +31,9 @@ interface MailProviderDriver
     public function headersFor(EmailMessage $message): array;
 
     public function capabilities(): ProviderCapabilities;
+
+    /**
+     * Classify a failed hand-over, with the provider's credentials removed from the summary.
+     */
+    public function classifyFailure(Throwable $exception, SmtpProvider $provider): SendFailure;
 }

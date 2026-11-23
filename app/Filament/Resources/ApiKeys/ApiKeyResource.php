@@ -66,6 +66,15 @@ class ApiKeyResource extends Resource
                     ->options(ApiScope::class)
                     ->required()
                     ->live()
+                    ->rules([
+                        fn (): Closure => function (string $attribute, mixed $value, Closure $fail): void {
+                            $scopes = array_map(fn (mixed $scope): string => $scope instanceof ApiScope ? $scope->value : (string) $scope, (array) $value);
+
+                            if (in_array(ApiScope::EmailsSendMarketing->value, $scopes, true) && ! in_array(ApiScope::EmailsSend->value, $scopes, true)) {
+                                $fail('Sending marketing email also needs the "Send email" scope.');
+                            }
+                        },
+                    ])
                     ->columnSpanFull(),
                 Select::make('allowed_sender_identity_ids')
                     ->label('May send from')
@@ -185,7 +194,10 @@ class ApiKeyResource extends Resource
                 ViewAction::make(),
                 ActionGroup::make([
                     EditAction::make()
-                        ->after(fn (ApiKey $record, AuditLogger $auditLogger) => $auditLogger->record('api_key.updated', $record, static::auditDetails($record))),
+                        ->after(fn (ApiKey $record, AuditLogger $auditLogger) => $auditLogger->record('api_key.updated', $record, [
+                            ...static::auditDetails($record),
+                            'changed' => array_values(array_diff(array_keys($record->getChanges()), ['updated_at'])),
+                        ])),
                     static::rotateAction(),
                     static::revokeAction(),
                 ]),
@@ -212,6 +224,11 @@ class ApiKeyResource extends Resource
             'key' => $apiKey->maskedKey(),
             'mode' => $apiKey->mode->value,
             'scopes' => $apiKey->scopes,
+            'allowed_senders' => SenderIdentity::query()->whereKey($apiKey->allowed_sender_identity_ids ?? [])->orderBy('email')->pluck('email')->all(),
+            'rate_limit_per_minute' => $apiKey->rate_limit_per_minute,
+            'daily_send_limit' => $apiKey->daily_send_limit,
+            'allowed_ips' => $apiKey->allowed_ips ?? [],
+            'expires_at' => $apiKey->expires_at?->toIso8601String(),
         ];
     }
 

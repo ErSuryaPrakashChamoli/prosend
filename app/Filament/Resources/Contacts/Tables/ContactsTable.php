@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Contacts\Tables;
 
 use App\Enums\AudienceType;
 use App\Enums\ConsentStatus;
+use App\Enums\ContactStage;
 use App\Enums\EmailPurpose;
 use App\Filament\Pages\ComposeEmail;
 use App\Filament\Resources\Campaigns\CampaignResource;
@@ -11,6 +12,7 @@ use App\Models\Campaign;
 use App\Models\Contact;
 use App\Models\ContactList;
 use App\Models\Segment;
+use App\Models\User;
 use Filament\Actions\Action;
 use Filament\Actions\BulkAction;
 use Filament\Actions\BulkActionGroup;
@@ -36,7 +38,7 @@ class ContactsTable
     public static function configure(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['lists', 'suppression']))
+            ->modifyQueryUsing(fn (Builder $query) => $query->with(['lists', 'suppression', 'owner']))
             ->defaultSort('created_at', 'desc')
             ->columns([
                 TextColumn::make('email')
@@ -46,7 +48,18 @@ class ContactsTable
                     ->sortable()
                     ->copyable(),
                 TextColumn::make('company')
+                    ->description(fn (Contact $record): ?string => $record->job_title)
                     ->searchable()
+                    ->toggleable(),
+                TextColumn::make('industry')
+                    ->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('stage')
+                    ->badge()
+                    ->sortable()
+                    ->toggleable(),
+                TextColumn::make('owner.name')
+                    ->label('Owner')
+                    ->placeholder('—')
                     ->toggleable(),
                 TextColumn::make('lists.name')
                     ->label('Lists')
@@ -61,6 +74,12 @@ class ContactsTable
                     ->label('Suppression')
                     ->badge()
                     ->placeholder('—'),
+                TextColumn::make('last_contacted_at')
+                    ->label('Last contacted')
+                    ->since()
+                    ->placeholder('Never')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('unsubscribed_at')
                     ->label('Unsubscribed')
                     ->since()
@@ -90,6 +109,43 @@ class ContactsTable
                     ->query(fn (Builder $query, array $data) => ($segment = Segment::query()->find($data['value'] ?? null))
                         ? $query->whereIn('contacts.id', $segment->contactsQuery()->select('contacts.id'))
                         : $query),
+                SelectFilter::make('stage')
+                    ->options(ContactStage::class)
+                    ->multiple(),
+                SelectFilter::make('owner')
+                    ->relationship('owner', 'name')
+                    ->preload(),
+                SelectFilter::make('industry')
+                    ->options(fn (): array => Contact::query()
+                        ->whereNotNull('industry')
+                        ->where('industry', '!=', '')
+                        ->distinct()
+                        ->orderBy('industry')
+                        ->limit(500)
+                        ->pluck('industry', 'industry')
+                        ->all())
+                    ->multiple()
+                    ->searchable(),
+                Filter::make('details')
+                    ->schema([
+                        TextInput::make('company')->label('Company contains'),
+                        TextInput::make('job_title')->label('Job title contains'),
+                        TextInput::make('source')->label('Source contains'),
+                    ])
+                    ->query(function (Builder $query, array $data): Builder {
+                        foreach (['company', 'job_title', 'source'] as $column) {
+                            if (filled($data[$column] ?? null)) {
+                                $query->whereContains($column, trim($data[$column]));
+                            }
+                        }
+
+                        return $query;
+                    })
+                    ->indicateUsing(fn (array $data): array => collect(['company' => 'Company', 'job_title' => 'Job title', 'source' => 'Source'])
+                        ->filter(fn (string $label, string $column): bool => filled($data[$column] ?? null))
+                        ->map(fn (string $label, string $column): string => "{$label} contains \"{$data[$column]}\"")
+                        ->values()
+                        ->all()),
                 SelectFilter::make('consent_status')
                     ->label('Consent')
                     ->options(ConsentStatus::class),
@@ -124,6 +180,8 @@ class ContactsTable
                     static::createCampaignAction(),
                     static::addToListAction(),
                     static::removeFromListAction(),
+                    static::setStageAction(),
+                    static::assignOwnerAction(),
                     DeleteBulkAction::make(),
                 ]),
             ])
@@ -187,6 +245,54 @@ class ContactsTable
                 Notification::make()
                     ->success()
                     ->title(Number::format($records->count()).' contacts added to '.$list->name)
+                    ->send();
+            })
+            ->deselectRecordsAfterCompletion();
+    }
+
+    private static function setStageAction(): BulkAction
+    {
+        return BulkAction::make('setStage')
+            ->label('Set stage')
+            ->icon(Heroicon::OutlinedFunnel)
+            ->visible(fn (): bool => auth()->user()->role->canManageAudiences())
+            ->schema([
+                Select::make('stage')
+                    ->options(ContactStage::class)
+                    ->required(),
+            ])
+            ->action(function (Collection $records, array $data): void {
+                $stage = $data['stage'] instanceof ContactStage ? $data['stage'] : ContactStage::from($data['stage']);
+                Contact::query()->whereKey($records->modelKeys())->update(['stage' => $stage]);
+
+                Notification::make()
+                    ->success()
+                    ->title(Number::format($records->count()).' contacts moved to '.$stage->getLabel())
+                    ->send();
+            })
+            ->deselectRecordsAfterCompletion();
+    }
+
+    private static function assignOwnerAction(): BulkAction
+    {
+        return BulkAction::make('assignOwner')
+            ->label('Assign owner')
+            ->icon(Heroicon::OutlinedUserCircle)
+            ->visible(fn (): bool => auth()->user()->role->canManageAudiences())
+            ->schema([
+                Select::make('owner_id')
+                    ->label('Owner')
+                    ->options(fn (): array => User::query()->orderBy('name')->pluck('name', 'id')->all())
+                    ->searchable()
+                    ->placeholder('Unassigned'),
+            ])
+            ->action(function (Collection $records, array $data): void {
+                $owner = filled($data['owner_id'] ?? null) ? User::query()->findOrFail($data['owner_id']) : null;
+                Contact::query()->whereKey($records->modelKeys())->update(['owner_id' => $owner?->getKey()]);
+
+                Notification::make()
+                    ->success()
+                    ->title(Number::format($records->count()).' contacts '.($owner ? "assigned to {$owner->name}" : 'unassigned'))
                     ->send();
             })
             ->deselectRecordsAfterCompletion();

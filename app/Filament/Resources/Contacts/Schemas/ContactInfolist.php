@@ -28,6 +28,14 @@ class ContactInfolist
                             ->placeholder('-'),
                         TextEntry::make('company')
                             ->placeholder('-'),
+                        TextEntry::make('job_title')
+                            ->placeholder('-'),
+                        TextEntry::make('industry')
+                            ->placeholder('-'),
+                        TextEntry::make('website')
+                            ->url(fn (Contact $record): ?string => $record->websiteUrl())
+                            ->openUrlInNewTab()
+                            ->placeholder('-'),
                         TextEntry::make('phone')
                             ->placeholder('-'),
                         TextEntry::make('source')
@@ -73,6 +81,27 @@ class ContactInfolist
                             ->label('Transactional email')
                             ->state(fn (Contact $record): string => $record->ineligibilityReason(EmailPurpose::Transactional) === null ? 'Eligible' : 'Not eligible: '.$record->ineligibilityReason(EmailPurpose::Transactional))
                             ->color(fn (Contact $record): string => $record->ineligibilityReason(EmailPurpose::Transactional) === null ? 'success' : 'danger'),
+                    ]),
+                Section::make('Outreach')
+                    ->columnSpan(2)
+                    ->columns(2)
+                    ->schema([
+                        TextEntry::make('stage')
+                            ->badge(),
+                        TextEntry::make('owner.name')
+                            ->label('Owner')
+                            ->placeholder('Unassigned'),
+                        TextEntry::make('last_contacted_at')
+                            ->label('Last contacted')
+                            ->dateTime()
+                            ->placeholder('Never'),
+                        TextEntry::make('last_replied_at')
+                            ->label('Last reply')
+                            ->dateTime()
+                            ->placeholder('-'),
+                        TextEntry::make('notes')
+                            ->placeholder('No notes')
+                            ->columnSpanFull(),
                     ]),
                 Section::make('Custom attributes')
                     ->columnSpan(2)

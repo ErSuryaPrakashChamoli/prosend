@@ -15,9 +15,17 @@ class EditCampaign extends EditRecord
     {
         return [
             ViewAction::make()
-                ->label('Review and launch'),
+                ->label('Review and submit'),
             DeleteAction::make(),
         ];
+    }
+
+    /**
+     * The last editor counts as an author: with a second approver required, they may not approve it.
+     */
+    protected function beforeSave(): void
+    {
+        $this->record->forceFill(['updated_by' => auth()->id()]);
     }
 
     protected function getSavedNotificationTitle(): ?string

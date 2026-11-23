@@ -22,6 +22,7 @@ enum EmailEventType: string implements HasColor, HasLabel
     case Ambiguous = 'ambiguous';
     case Suppressed = 'suppressed';
     case Cancelled = 'cancelled';
+    case Captured = 'captured';
 
     public function getLabel(): string
     {
@@ -41,6 +42,7 @@ enum EmailEventType: string implements HasColor, HasLabel
             self::Ambiguous => 'Outcome unknown',
             self::Suppressed => 'Skipped (suppressed)',
             self::Cancelled => 'Cancelled',
+            self::Captured => 'Captured in sandbox',
         };
     }
 
@@ -52,7 +54,7 @@ enum EmailEventType: string implements HasColor, HasLabel
             self::Delivered => 'success',
             self::Deferred, self::SoftBounced, self::Ambiguous => 'warning',
             self::Bounced, self::Complained, self::Failed => 'danger',
-            self::Unsubscribed, self::Suppressed, self::Cancelled => 'gray',
+            self::Unsubscribed, self::Suppressed, self::Cancelled, self::Captured => 'gray',
         };
     }
 }

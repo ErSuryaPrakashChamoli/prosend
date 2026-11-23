@@ -1,0 +1,245 @@
+@import '../../../../vendor/filament/filament/resources/css/theme.css';
+
+@source '../../../../app/Filament/**/*';
+@source '../../../../resources/views/filament/**/*';
+
+/*
+ * ProSend admin theme.
+ *
+ * Filament components are restyled only through their documented CSS hook classes (fi-*), so the
+ * markup stays Filament's own and upgrades keep working. Colours come from the panel palettes
+ * (primary = ProSend blue, gray = zinc), so every rule below works in light and dark mode.
+ */
+
+/* Canvas and typography */
+
+.fi-body {
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    background-image: radial-gradient(
+        64rem 28rem at 85% -8rem,
+        color-mix(in oklab, var(--color-primary-500) 9%, transparent),
+        transparent 70%
+    );
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+
+    @apply bg-gray-50 dark:bg-gray-950;
+}
+
+::selection {
+    @apply bg-primary-500/20 text-gray-950 dark:text-white;
+}
+
+/* Topbar: frosted glass. The blur sits on a pseudo-element so dropdowns inside the topbar keep their positioning. */
+
+.fi-topbar {
+    @apply relative bg-transparent shadow-none ring-0;
+
+    &::before {
+        content: '';
+
+        @apply absolute inset-0 -z-10 border-b border-gray-950/[0.06] bg-white/75 backdrop-blur-xl backdrop-saturate-150;
+    }
+}
+
+/* Tailwind's dark: variant cannot follow a pseudo-element, so pseudo-element dark styles use .dark directly. */
+.dark .fi-topbar::before {
+    @apply border-white/[0.06] bg-gray-950/70;
+}
+
+/* Sidebar */
+
+.fi-sidebar {
+    @apply lg:border-e lg:border-gray-950/[0.06] lg:bg-white/60 dark:lg:border-white/[0.06] dark:lg:bg-gray-900/30;
+}
+
+.fi-sidebar-nav {
+    @apply gap-y-6 px-4 py-6;
+}
+
+.fi-sidebar-nav-groups {
+    @apply gap-y-6;
+}
+
+.fi-sidebar-group-label {
+    @apply text-[0.6875rem] font-semibold tracking-[0.08em] text-gray-400 uppercase dark:text-gray-500;
+}
+
+.fi-sidebar-item-btn {
+    @apply rounded-lg px-2.5 py-2;
+
+    & > .fi-sidebar-item-label {
+        @apply text-gray-600 dark:text-gray-300;
+    }
+}
+
+.fi-sidebar-item.fi-sidebar-item-has-url > .fi-sidebar-item-btn {
+    @apply hover:bg-gray-950/[0.04] focus-visible:bg-gray-950/[0.04] dark:hover:bg-white/[0.05] dark:focus-visible:bg-white/[0.05];
+
+    &:hover > .fi-sidebar-item-label {
+        @apply text-gray-950 dark:text-white;
+    }
+}
+
+.fi-sidebar-item.fi-active > .fi-sidebar-item-btn {
+    @apply bg-primary-50 ring-1 ring-primary-600/10 ring-inset dark:bg-primary-400/10 dark:ring-primary-400/15;
+
+    &::before {
+        content: '';
+
+        @apply absolute inset-y-2 -start-2 w-[3px] rounded-e-full bg-primary-600;
+    }
+
+    & > .fi-sidebar-item-label {
+        @apply font-semibold text-primary-700 dark:text-primary-300;
+    }
+
+    & > .fi-icon {
+        @apply text-primary-600 dark:text-primary-400;
+    }
+}
+
+.dark .fi-sidebar-item.fi-active > .fi-sidebar-item-btn::before {
+    @apply bg-primary-400;
+}
+
+/* Page header */
+
+.fi-header-heading {
+    @apply tracking-tight;
+}
+
+.fi-header-subheading {
+    @apply text-gray-500 dark:text-gray-400;
+}
+
+.fi-breadcrumbs {
+    @apply text-[0.8125rem];
+}
+
+/* Cards: sections, stats, charts and tables share one surface */
+
+.fi-section:not(.fi-section-not-contained),
+.fi-ta-ctn,
+.fi-wi-stats-overview-stat,
+.fi-tabs:not(.fi-contained) {
+    @apply rounded-2xl shadow-[0_1px_2px_rgb(0_0_0/0.04),0_4px_16px_-8px_rgb(0_0_0/0.08)] ring-gray-950/[0.07] dark:bg-gray-900/70 dark:shadow-none dark:ring-white/[0.08];
+}
+
+.fi-section-header-heading {
+    @apply tracking-tight;
+}
+
+/*
+ * Filament sizes a section's grid column to its header text (w-max), so a long description made the
+ * dashboard's Delivery section 873px wide on phones and cut off its cards. Pin the column to the
+ * available width so the text wraps instead.
+ */
+.fi-section:not(.fi-aside),
+.fi-section:not(.fi-aside) > .fi-section-content-ctn {
+    @apply grid-cols-1;
+}
+
+/* Stats */
+
+.fi-wi-stats-overview-stat {
+    @apply transition duration-150;
+}
+
+a.fi-wi-stats-overview-stat {
+    @apply hover:-translate-y-px hover:ring-primary-600/25 dark:hover:ring-primary-400/30;
+}
+
+.fi-wi-stats-overview-stat-label {
+    @apply text-xs font-semibold tracking-[0.06em] text-gray-500 uppercase dark:text-gray-400;
+}
+
+.fi-wi-stats-overview-stat-value {
+    @apply tracking-tighter;
+}
+
+/* Tables */
+
+.fi-ta-header-cell {
+    @apply bg-gray-50/80 text-xs font-semibold tracking-[0.04em] text-gray-500 uppercase dark:bg-white/[0.02] dark:text-gray-400;
+}
+
+.fi-ta-row {
+    @apply transition-colors duration-75 hover:bg-gray-50/70 dark:hover:bg-white/[0.02];
+}
+
+.fi-ta-table {
+    @apply tabular-nums;
+}
+
+/* Badges, inputs, modals and dropdowns */
+
+.fi-badge {
+    @apply rounded-full;
+}
+
+.fi-input-wrp {
+    @apply transition-shadow;
+}
+
+.fi-modal-window {
+    @apply rounded-2xl;
+}
+
+.fi-dropdown-panel {
+    @apply rounded-xl shadow-lg shadow-gray-950/10;
+}
+
+/* Sign-in and other simple pages: a branded backdrop behind the card */
+
+.fi-simple-layout {
+    @apply relative isolate overflow-hidden;
+
+    &::before {
+        content: '';
+
+        @apply absolute inset-0 -z-10;
+
+        background-image:
+            radial-gradient(40rem 24rem at 15% 0%, color-mix(in oklab, var(--color-primary-500) 22%, transparent), transparent 70%),
+            radial-gradient(36rem 22rem at 90% 100%, color-mix(in oklab, var(--color-primary-300) 20%, transparent), transparent 70%);
+    }
+
+    &::after {
+        content: '';
+
+        @apply absolute inset-0 -z-10 opacity-60;
+
+        background-image:
+            linear-gradient(to right, rgb(0 0 0 / 0.04) 1px, transparent 1px),
+            linear-gradient(to bottom, rgb(0 0 0 / 0.04) 1px, transparent 1px);
+        background-size: 2.5rem 2.5rem;
+        mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+    }
+}
+
+.dark .fi-simple-layout::after {
+    @apply opacity-25;
+
+    background-image:
+        linear-gradient(to right, rgb(255 255 255 / 0.06) 1px, transparent 1px),
+        linear-gradient(to bottom, rgb(255 255 255 / 0.06) 1px, transparent 1px);
+}
+
+.fi-simple-main {
+    @apply bg-white/85 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_24px_48px_-24px_rgb(0_0_0/0.18)] ring-gray-950/[0.07] backdrop-blur-xl sm:rounded-3xl dark:bg-gray-900/80 dark:ring-white/10;
+}
+
+.fi-simple-header-heading {
+    @apply tracking-tight;
+}
+
+/* Respect reduced motion everywhere we added movement */
+
+@media (prefers-reduced-motion: reduce) {
+    .fi-wi-stats-overview-stat,
+    .fi-ta-row,
+    .fi-input-wrp {
+        @apply transition-none hover:translate-y-0;
+    }
+}

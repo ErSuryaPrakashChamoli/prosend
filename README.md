@@ -1,12 +1,12 @@
 # ProSend
 
-ProSend is an email operations platform built on Laravel 13 and Filament 5. It manages contacts and consent, sends individual emails and rate-limited campaigns through Brevo (or any SMTP provider), and tracks every message from queue to delivery.
+ProSend is an email operations platform built on Laravel 13 and Filament 5. It manages contacts and consent, sends individual emails and rate-limited campaigns through Brevo, Mailtrap, or any SMTP provider, and tracks every message from queue to delivery.
 
 ## Requirements
 
 - PHP 8.5, Composer, Node.js
 - MySQL (the default database is `db_email`)
-- A Brevo account with a verified sender, or another SMTP provider
+- A Brevo or Mailtrap account with a verified sending domain, or another SMTP provider
 
 ## First-time setup
 
@@ -52,12 +52,15 @@ Laravel's scheduler must also run every minute. It re-checks sending domains dai
 4. **Set up delivery webhooks.** Open the provider under Infrastructure > SMTP providers and choose More > Set up webhook. Copy the URL, which is shown once. In Brevo, add it under Transactional > Settings > Webhook and select delivered, soft bounce, hard bounce, invalid email, blocked, error, spam, unsubscribed, opened, and clicked. Without webhooks ProSend only knows that Brevo *accepted* an email, not whether it was delivered, bounced, or reported as spam.
 5. **Set `APP_URL` to the public HTTPS address.** Unsubscribe links and webhook URLs are built from it, and webhooks cannot reach `localhost`.
 6. **Set `PROSEND_REQUIRE_VERIFIED_SENDERS=true`.** It defaults to true when `APP_ENV=production`.
-7. **For a new domain or account, create a warm-up plan** (see below) before sending campaigns.
+7. **Set `PROSEND_POSTAL_ADDRESS`** to your business postal address. It appears in the footer of every marketing email; US law (CAN-SPAM) requires one, and campaigns warn while it is empty.
+8. **For a new domain or account, create a warm-up plan** (see below) before sending campaigns.
 
 ## How sending works
 
 - **Compose email** sends to up to 50 addresses (`PROSEND_COMPOSE_MAX_RECIPIENTS`). Each address in To gets its own email, so recipients never see each other. CC and BCC are only allowed with a single To address.
-- **Campaigns** send one email to a list, a selection of contacts, or all contacts. Before launch, ProSend shows the eligible, skipped, and duplicate counts, the provider quota left, and the estimated duration. Above 500 recipients (`PROSEND_LARGE_AUDIENCE_THRESHOLD`) you must type the recipient count to confirm. Emails are spaced out at the campaign's per-minute rate, and the provider's per-minute and daily limits are always enforced.
+- **Campaigns** send one email to a list, a selection of contacts, or all contacts. Before submission, and again before approval, ProSend shows the eligible, skipped, and duplicate counts, the provider quota left, and the estimated duration. Above 500 recipients (`PROSEND_LARGE_AUDIENCE_THRESHOLD`) you must type the recipient count to confirm. Emails are spaced out at the campaign's per-minute rate, and the provider's per-minute and daily limits are always enforced.
+- **Campaign approval:** every campaign is sent in two steps. A Sender or administrator chooses **Submit for approval**. The campaign is then locked, and administrators get a notification in the panel. An administrator chooses **Approve and send** (or **Approve and schedule**), which records who approved it and for how many recipients. They can also choose **Return to draft** with a reason, and the submitter can **Withdraw** it. With `PROSEND_CAMPAIGN_REQUIRE_SECOND_APPROVER=true`, nobody can approve a campaign they created or submitted; leave it off if you have only one administrator. If the eligible audience has grown by more than `PROSEND_CAMPAIGN_APPROVAL_GROWTH_PERCENT` (10%) by the time sending starts, for example after an import into a targeted list, the campaign goes back to Pending approval instead of sending.
+- **Receiving-domain limits** (optional): `recipient_domain_limits` in `config/prosend.php` caps emails per minute to one receiving domain across all providers, for example `'gmail.com' => 60`. Email over a limit waits. Brevo already throttles per domain, so this matters most when sending through your own mail server.
 - **Transactional vs. marketing:** marketing email goes only to contacts with recorded consent who have not unsubscribed, and always carries an unsubscribe footer plus one-click `List-Unsubscribe` headers. Transactional email ignores unsubscribes, but never goes to addresses that hard-bounced, complained, or were suppressed manually.
 - **Suppression list:** hard bounces, invalid addresses, spam complaints, and unsubscribes are added automatically from Brevo webhooks and unsubscribe links. Eligibility is checked again when each email is sent. Importing a contact never removes a suppression or an unsubscribe. Only administrators can remove a suppression.
 
@@ -67,28 +70,54 @@ Laravel's scheduler must also run every minute. It re-checks sending domains dai
 | --- | --- |
 | Queued | Waiting for the queue worker. |
 | Retrying | A temporary error (SMTP 4xx or a lost connection); another attempt is scheduled after 1, 5, 15, then 60 minutes. |
-| Accepted by provider | Brevo took the email. This does **not** prove it reached the inbox. |
+| Accepted by provider | The provider took the email. This does **not** prove it reached the inbox. |
 | Delivered | Brevo reported that the receiving server accepted it (webhook). |
 | Soft bounce / Hard bounce / Spam complaint | Reported by Brevo. Hard bounces and complaints suppress the address. |
 | Failed | Rejected (SMTP 5xx) or out of retries. Configuration problems (bad credentials, unverified sender) can be retried; rejected addresses cannot. |
 | Status unknown | The connection broke after the email was handed over, so it may already be on its way. ProSend never retries these automatically, to avoid duplicates. A person can retry one after accepting that risk. |
 | Skipped (suppressed) / Cancelled | Not sent. |
+| Captured in sandbox | A sandbox provider (Mailtrap Email Sandbox) kept the email for inspection. Nobody received it, and it is left out of reports. |
 
 Each send job claims its message atomically before contacting the provider, and the message's Message-ID is stored before sending. So a retried or duplicated job cannot send the same email twice, and webhooks always match the right message.
+
+## SMTP providers and Mailtrap
+
+Infrastructure > SMTP providers holds any number of providers: Brevo, Mailtrap Email Sending (live, transactional or Bulk Stream), Mailtrap Email Sandbox (testing only), and generic SMTP for anything else, such as Amazon SES, SendGrid, Microsoft 365, or Google Workspace SMTP. Each sender identity sends through exactly one provider, so choosing the From address chooses the provider. There is no automatic fallback.
+
+- **Sandbox email is captured, never delivered.** It gets the status *Captured in sandbox*, is marked as a sandbox everywhere a sender can be picked, and campaigns warn before launch. Sandbox providers are refused in production unless `PROSEND_ALLOW_SANDBOX_PROVIDERS=true`.
+- **Sandbox and live never mix.** A provider cannot switch between sandbox and live sending, a sender identity cannot move between the two while it has email waiting or a launched campaign, and a retried email is never sent the other way.
+- **Network safety.** SMTP hosts are resolved and checked on every connection, and the connection is pinned to the checked address. Link-local and cloud metadata addresses are always refused; private and loopback addresses need `PROSEND_SMTP_ALLOW_PRIVATE_HOSTS=true` (the default only when `APP_ENV=local`). Changing a provider's host, or turning its encryption off, requires entering its password again.
+
+Setup, testing, routing, and troubleshooting are covered in [docs/guides/mailtrap-and-smtp-providers.md](docs/guides/mailtrap-and-smtp-providers.md).
 
 ## Roles
 
 | Role | Can |
 | --- | --- |
-| Administrator | Everything, including SMTP providers, sender identities, domain authentication, warm-up plans, users, removing suppressions, and audit logs. |
-| Sender | Manage contacts, lists, segments, and templates; import and export; compose email; and run campaigns. |
+| Administrator | Everything, including approving campaigns, SMTP providers, sender identities, domain authentication, warm-up plans, users, removing suppressions, and audit logs. |
+| Sender | Manage contacts, lists, segments, and templates; import and export; compose email; and create, submit, pause, and cancel campaigns. |
 | Viewer | Read the dashboard, email activity, contacts, and campaigns. |
 
-Provider changes (never the secrets themselves), role changes, sender verification, campaign launches, pauses, cancellations and retries, and suppression changes are recorded under System > Audit logs.
+Provider changes (never the secrets themselves), role changes, sender verification, campaign submissions, approvals, returns to draft, pauses, cancellations and retries, and suppression changes are recorded under System > Audit logs.
+
+## Prospects
+
+Contacts double as prospects. Besides name, company and consent, each has a job title, industry, website, stage (New, Active, Contacted, Replied, Interested, Converted), owner, last contacted and last reply dates, and notes. The contacts table filters and bulk-updates by stage and owner, and segments can match job title, industry, source and stage.
+
+- **Last contacted** is set when a provider accepts a campaign or Compose email to the contact, and a New or Active prospect then moves to Contacted. Email sent through the API, such as receipts, does not count.
+- **Last reply** and the Replied stage are recorded by hand: ProSend has no inbox, so it cannot see replies.
+- **Unsubscribed and Do Not Contact are not stages.** They are the contact's unsubscribe and the suppression list, which every send checks. **Do not contact** on a contact's page adds a manual suppression; only an administrator can remove it.
 
 ## Importing contacts
 
-Contacts > Import / export > Import CSV accepts any CSV with an email column, maps the columns, and processes the file on the queue. Rows that fail validation can be downloaded as a CSV from the completion notification. Existing contacts are matched by email, and empty cells never overwrite saved data. Every import must confirm that the contacts asked to receive email; purchased, rented, or scraped lists must not be used.
+Contacts > Import / export > Import CSV or Excel accepts a CSV file or an Excel workbook (.xlsx) with an email column, maps the columns (including job title, industry and website), and processes the file on the queue.
+
+From a workbook, only the first visible worksheet is read, and its first row is the header:
+- Formulas import their results.
+- Dates arrive as `2026-03-01` (with a time if there is one).
+- TRUE/FALSE cells work as consent values.
+- Columns beyond the header, such as notes, are ignored.
+- A workbook may declare at most 500 columns and contain at most 100,000 rows; bigger files must be split or saved as CSV. Rows that fail validation can be downloaded as a CSV from the completion notification. Existing contacts are matched by email, and empty cells never overwrite saved data. Every import must confirm that the contacts asked to receive email; purchased, rented, or scraped lists must not be used.
 
 For small lists, Contacts > Import / export > Paste email addresses accepts addresses separated by commas, spaces, or new lines.
 
@@ -97,7 +126,7 @@ For small lists, Contacts > Import / export > Paste email addresses accepts addr
 Email Operations > Email templates holds reusable content. Every saved change becomes a new numbered version. Restoring an old version saves it as a new version, so history is never rewritten. **Add sample templates** creates welcome, email verification, password reset, account notification, order update, newsletter, and announcement templates.
 
 - Transactional and marketing templates are kept apart: a campaign or composed email can only use a template of its own type, and only active templates are offered.
-- Variables: the built-in merge tags are `first_name`, `last_name`, `company_name`, `email`, and `unsubscribe_url`. Any other `{{ name }}` is read from the contact's custom attributes, for example `{{ action_url }}` or `{{ order_number }}`. Values are always escaped, and links built from them are sanitized.
+- Variables: the built-in merge tags are `name` (first and last name), `first_name`, `last_name`, `company_name`, `job_title`, `industry`, `website`, `email`, and `unsubscribe_url`. When a contact has no `name`, `job_title`, `industry` or `website`, a custom attribute of the same name is used instead. Any other `{{ name }}` is read from the contact's custom attributes, for example `{{ action_url }}` or `{{ order_number }}`. Values are always escaped, and links built from them are sanitized.
 - **Required variables:** contacts without a value for one of these are skipped by campaigns, and rejected in Compose. Recipients never get an email with a blank link.
 
 ## Segments
@@ -124,7 +153,7 @@ Deliverability > Warm-up planner limits daily volume for a provider, or for one 
 
 ## Reports
 
-The dashboard covers delivery stats, sending volume, outcomes, bounce and complaint rate trends, volume by sending domain, provider performance, campaign performance, and queue throughput. All of it is filterable by date, email type, provider, campaign, and sending domain. Email activity and the suppression list have tabs for bounces, complaints, failures, and unsubscribes. Email activity and each campaign's recipients can be exported to CSV.
+The dashboard covers delivery stats, sending volume, outcomes, bounce and complaint rate trends, volume by sending domain, provider performance, campaign performance, and queue throughput. All of it is filterable by date, email type, provider, campaign, and sending domain. An audience panel shows current totals regardless of those filters: contacts by stage, contacts eligible for marketing, suppressed addresses, unsubscribes, and campaigns by status. Email activity and the suppression list have tabs for bounces, complaints, failures, and unsubscribes. Email activity and each campaign's recipients can be exported to CSV. In every export, a cell starting with `=`, `+`, `-` or `@` gets a leading apostrophe so spreadsheets do not run it as a formula; the contact importer removes that apostrophe again.
 
 ## Sending API
 
@@ -134,9 +163,9 @@ Other applications can send transactional email through ProSend and read its sta
 
 An administrator creates keys under Infrastructure > API keys. Each key has:
 
-- **Scopes:** `emails:send`, `emails:send_marketing` (marketing email also needs `emails:send`), `emails:read` (emails this key sent), and `emails:read_all` (every email).
+- **Scopes:** `emails:send`, `emails:send_marketing` (marketing email also needs `emails:send`), `emails:read` (emails this key sent), and `emails:read_all` (every email; includes `emails:read`).
 - **Allowed senders:** the sender identities it may use as From. Required for sending keys.
-- **Limits:** requests per minute (default 60), an optional daily send limit, an optional IP allowlist (addresses or CIDR ranges), and an optional expiry.
+- **Limits:** requests per minute (default 60), an optional daily send limit (every To, CC and BCC address counts as one email), an optional IP allowlist (addresses or CIDR ranges), and an optional expiry. Behind a load balancer or reverse proxy, set `PROSEND_TRUSTED_PROXIES` to its addresses, or ProSend sees the proxy's address instead of the caller's and IP allowlists cannot work.
 - **Mode:** a **live** key (`psk_live_…`) sends. A **test** key (`psk_test_…`) runs every check and records the email with the status *Test (not sent)*, but never contacts a provider. Test emails are left out of reports.
 
 The full key is shown **once**, when it is created or rotated. ProSend stores only a hash of the secret, so a lost key cannot be recovered: rotate it. Rotating issues a new key and keeps the old one working for a grace period you choose (none, 1, 3, or 7 days). Revoking stops a key immediately. Creating, editing, rotating, and revoking keys are audit-logged; the logs never include the secret.
@@ -181,7 +210,9 @@ curl https://prosend.example.com/api/v1/me -H "Authorization: Bearer $PROSEND_AP
 - **Retry safely with `Idempotency-Key`.** Repeating a request with the same key and body within 24 hours returns the original response, with the header `Idempotent-Replayed: true`, and sends nothing new. The same key with a different body is refused (`422 idempotency_key_reused`).
 - **The same rules as the panel apply:** suppressed addresses and, for marketing, recipients without consent are refused (`recipient_not_eligible`); templates must be active and of the same purpose; HTML is sanitised; marketing email gets the unsubscribe footer and headers.
 - **Errors** always look like `{"error": {"code": "missing_scope", "message": "…", "request_id": "req_…"}}`. Build on the `code`; the message may change. Quote the `request_id` (also in the `X-Request-Id` header) when asking for help.
-- **Rate limits** return `429` with `Retry-After`. Twenty failed authentication attempts from one IP within 10 minutes block that IP for the rest of the window.
+- **Rate limits** return `429` with `Retry-After`. More than 20 requests with invalid keys from one IP within a minute block further invalid attempts from that IP for 10 minutes. Requests with a valid key are never blocked by this.
+- **Attachments** must really be the type given in `content_type` (a program renamed to `.pdf` is refused), and the name the recipient sees always ends in an extension of that type.
+- **API keys never reach the logs:** anything that looks like a key is masked in request logs and the application log, and a request with a key anywhere in its URL is refused.
 
 Every request is logged (method, path, status, duration, IP, error code; never headers or bodies) and counted per key per day, shown on the key's page.
 
@@ -197,7 +228,7 @@ Every request is logged (method, path, status, duration, IP, error code; never h
 | API usage counts | 13 months | `PROSEND_RETAIN_API_USAGE_MONTHS` |
 | Audit logs | 24 months | `PROSEND_RETAIN_AUDIT_MONTHS` |
 
-Messages still queued, retrying, or sending are never pruned.
+Messages still queued, retrying, or sending are never pruned, and an attachment file shared by several emails is only deleted once none of them needs it. An email whose content was pruned can no longer be retried.
 
 ## Configuration
 
@@ -211,7 +242,9 @@ php artisan test --compact       # the full test suite (in-memory SQLite)
 vendor/bin/pint --format agent   # code style
 ```
 
-Tests never contact a real provider. `Tests\Fakes\FakeMailProviderDriver` records messages in memory and can simulate any SMTP failure.
+Tests never contact a real provider or DNS. `Tests\Fakes\FakeMailProviderDriver` records messages in memory and can simulate any SMTP failure, and `Tests\Fakes\FakeDnsResolver` answers every lookup.
+
+Tests refuse to run unless the database is in-memory SQLite. A cached configuration (`php artisan config:cache` or `optimize`) overrides `phpunit.xml`, and the tests would then erase the real database, so run `php artisan config:clear` first.
 
 ## Not built yet
 
@@ -221,4 +254,5 @@ Phase 3 is being built in milestones; the approved plan is in [docs/specs/phase-
 - Outgoing webhooks, so your applications learn about deliveries and bounces without polling.
 - Two-person approval for contact imports, with a preview before processing.
 - Automation workflows.
-- Additional providers (Resend, Mailjet, SMTP2GO, Amazon SES) and fallback between providers.
+- Processing Mailtrap's delivery webhooks. Until then, Mailtrap email stays *Accepted by provider*.
+- API-based providers (Resend, Mailjet, SMTP2GO, Amazon SES) and fallback between providers. SMTP endpoints of these work today as generic SMTP.

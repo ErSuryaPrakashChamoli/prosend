@@ -34,6 +34,7 @@ class EmailPreviewer
         return view('mail.outgoing', [
             'rendered' => $rendered,
             'senderName' => $senderIdentity?->name ?? config('app.name'),
+            'postalAddress' => config('prosend.marketing.postal_address'),
         ])->render();
     }
 }

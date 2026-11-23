@@ -52,10 +52,12 @@ class EmailMessage extends Model
             'variables' => 'encrypted:array',
             'attempts' => 'integer',
             'is_retryable' => 'boolean',
+            'is_sandbox' => 'boolean',
             'scheduled_at' => 'datetime',
             'queued_at' => 'datetime',
             'sending_started_at' => 'datetime',
             'accepted_at' => 'datetime',
+            'captured_at' => 'datetime',
             'delivered_at' => 'datetime',
             'failed_at' => 'datetime',
         ];
@@ -171,6 +173,15 @@ class EmailMessage extends Model
     }
 
     /**
+     * Whether `prosend:prune` removed the content under the retention policy, so the email can no longer be sent.
+     * Campaign messages never store a body of their own: they are rendered from the campaign.
+     */
+    public function contentWasPruned(): bool
+    {
+        return $this->campaign_id === null && $this->html_body === null;
+    }
+
+    /**
      * Record an event. Provider events carry a fingerprint so a redelivered webhook is stored once.
      *
      * @param  array<string, mixed>  $details
@@ -262,6 +273,53 @@ class EmailMessage extends Model
         $this->forceFill($attributes)->save();
 
         $this->recordEvent(EmailEventType::Accepted, details: ['provider' => $provider->name]);
+
+        // Email sent by people counts as outreach; system email from the API, such as receipts, does not.
+        // The email has already been sent, so a failure here is reported but never stops the send job.
+        if ($this->contact_id !== null && in_array($this->source, [MessageSource::Campaign, MessageSource::Compose], true)) {
+            rescue(fn () => Contact::recordContacted($this->contact_id));
+        }
+    }
+
+    /**
+     * Fix the message to sandbox or live sending the first time it is processed, and refuse to send it the
+     * other way later, for example when a failed message is retried after its sender identity moved
+     * between a sandbox and a live provider.
+     */
+    public function environmentProblem(SmtpProvider $provider): ?string
+    {
+        if ($this->is_sandbox === null) {
+            $this->forceFill(['is_sandbox' => $provider->isSandbox()])->save();
+
+            return null;
+        }
+
+        if ($this->is_sandbox === $provider->isSandbox()) {
+            return null;
+        }
+
+        return $this->is_sandbox
+            ? "This email was created for sandbox testing, but {$this->senderIdentity->email} now sends through the live provider {$provider->name}. It was not sent, so test email is never delivered for real."
+            : "This email was created for live sending, but {$this->senderIdentity->email} now sends through the sandbox provider {$provider->name}. It was not sent, so real email is never captured. Send it again as a new email.";
+    }
+
+    /**
+     * A sandbox provider took the message for inspection. It never reaches the recipient, so it is not
+     * counted as accepted, delivered, or as outreach to the contact. captured_at counts it against the
+     * sandbox's own sending limits.
+     */
+    public function markCaptured(SmtpProvider $provider): void
+    {
+        $this->forceFill([
+            'status' => MessageStatus::Captured,
+            'smtp_provider_id' => $provider->getKey(),
+            'captured_at' => now(),
+            'error_code' => null,
+            'error_message' => null,
+            'is_retryable' => false,
+        ])->save();
+
+        $this->recordEvent(EmailEventType::Captured, details: ['provider' => $provider->name, 'sandbox' => true]);
     }
 
     public function markDeferred(string $summary, ?string $code = null): void

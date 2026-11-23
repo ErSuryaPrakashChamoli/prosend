@@ -8,6 +8,7 @@ use Filament\Support\Contracts\HasLabel;
 enum CampaignStatus: string implements HasColor, HasLabel
 {
     case Draft = 'draft';
+    case PendingApproval = 'pending_approval';
     case Scheduled = 'scheduled';
     case Queued = 'queued';
     case Sending = 'sending';
@@ -21,6 +22,7 @@ enum CampaignStatus: string implements HasColor, HasLabel
     {
         return match ($this) {
             self::Draft => 'Draft',
+            self::PendingApproval => 'Pending approval',
             self::Scheduled => 'Scheduled',
             self::Queued => 'Queued',
             self::Sending => 'Sending',
@@ -38,7 +40,7 @@ enum CampaignStatus: string implements HasColor, HasLabel
             self::Draft, self::Cancelled => 'gray',
             self::Scheduled, self::Queued => 'info',
             self::Sending => 'primary',
-            self::Paused, self::PartiallyFailed => 'warning',
+            self::PendingApproval, self::Paused, self::PartiallyFailed => 'warning',
             self::Completed => 'success',
             self::Failed => 'danger',
         };

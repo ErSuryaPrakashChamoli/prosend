@@ -1,7 +1,9 @@
 <?php
 
 use App\Enums\CampaignStatus;
+use App\Enums\ContactStage;
 use App\Enums\EmailPurpose;
+use App\Enums\MessageSource;
 use App\Enums\MessageStatus;
 use App\Enums\ProviderHealth;
 use App\Enums\SuppressionReason;
@@ -308,4 +310,88 @@ it('records each hand-over attempt with its outcome', function () {
         ['attempt' => 1, 'outcome' => 'deferred', 'code' => '421'],
         ['attempt' => 2, 'outcome' => 'accepted', 'code' => null],
     ]);
+});
+
+it('puts the business postal address in the marketing footer', function () {
+    config(['prosend.marketing.postal_address' => 'Acme Ltd, 1 High Street, London']);
+    $driver = FakeMailProviderDriver::install();
+    $contact = Contact::factory()->consented()->create();
+    $message = EmailMessage::factory()->for($contact)->create(['purpose' => EmailPurpose::Marketing, 'to_email' => $contact->email]);
+
+    dispatch_sync(new SendEmailMessage($message));
+
+    $email = $driver->sent[0]->getOriginalMessage();
+    expect($email->getHtmlBody())->toContain('Acme Ltd, 1 High Street, London')
+        ->and($email->getTextBody())->toContain('Acme Ltd, 1 High Street, London');
+});
+
+it('waits when the recipient domain per-minute limit is used up', function () {
+    config(['prosend.sending.recipient_domain_limits' => ['gmail.com' => 1]]);
+    $driver = FakeMailProviderDriver::install();
+    $sender = SenderIdentity::factory()->create();
+    $first = EmailMessage::factory()->for($sender)->create(['to_email' => 'ann@gmail.com']);
+    $sameDomain = EmailMessage::factory()->for($sender)->create(['to_email' => 'bob@GMAIL.com']);
+    $otherDomain = EmailMessage::factory()->for($sender)->create(['to_email' => 'cara@example.com']);
+    $job = (new SendEmailMessage($sameDomain))->withFakeQueueInteractions();
+
+    app()->call([new SendEmailMessage($first), 'handle']);
+    app()->call([$job, 'handle']);
+    app()->call([new SendEmailMessage($otherDomain), 'handle']);
+
+    expect($driver->sent)->toHaveCount(2);
+    expect($sameDomain->refresh()->status)->toBe(MessageStatus::Queued);
+    $job->assertReleased();
+});
+
+it('records when a contact was last contacted and moves a new prospect to contacted', function (MessageSource $source, ContactStage $stageBefore, ContactStage $stageAfter, bool $recordsContact) {
+    $this->travelTo('2026-10-29 10:00:00');
+    FakeMailProviderDriver::install();
+    $contact = Contact::factory()->create(['stage' => $stageBefore]);
+    $message = EmailMessage::factory()->for($contact)->create(['to_email' => $contact->email, 'source' => $source]);
+
+    dispatch_sync(new SendEmailMessage($message));
+
+    expect($contact->refresh()->stage)->toBe($stageAfter)
+        ->and($contact->last_contacted_at?->toDateTimeString())->toBe($recordsContact ? '2026-10-29 10:00:00' : null);
+})->with([
+    'campaign email to a new prospect' => [MessageSource::Campaign, ContactStage::New, ContactStage::Contacted, true],
+    'compose email to an active prospect' => [MessageSource::Compose, ContactStage::Active, ContactStage::Contacted, true],
+    'campaign email to an interested prospect' => [MessageSource::Campaign, ContactStage::Interested, ContactStage::Interested, true],
+    'API email' => [MessageSource::Api, ContactStage::New, ContactStage::New, false],
+]);
+
+it('does not record contact when the provider rejects the email', function () {
+    FakeMailProviderDriver::install()->failWith(new UnexpectedResponseException('550 Mailbox unavailable', 550));
+    $contact = Contact::factory()->create();
+    $message = EmailMessage::factory()->for($contact)->create(['to_email' => $contact->email, 'source' => MessageSource::Campaign]);
+
+    dispatch_sync(new SendEmailMessage($message));
+
+    expect($contact->refresh())
+        ->stage->toBe(ContactStage::New)
+        ->last_contacted_at->toBeNull();
+});
+
+it('fails an email whose content was removed under the retention policy instead of sending it', function () {
+    $driver = FakeMailProviderDriver::install();
+    $message = EmailMessage::factory()->create(['html_body' => null]);
+
+    app()->call([new SendEmailMessage($message), 'handle']);
+
+    expect($driver->sent)->toBeEmpty();
+    expect($message->refresh())
+        ->status->toBe(MessageStatus::Failed)
+        ->is_retryable->toBeFalse()
+        ->error_message->toContain('retention policy');
+});
+
+it('keeps exception details out of the error shown to API clients', function () {
+    $message = EmailMessage::factory()->create();
+
+    (new SendEmailMessage($message))->failed(new RuntimeException('SQLSTATE[HY000] [2002] Connection refused (Host: db.internal)'));
+
+    expect($message->refresh()->error_message)
+        ->not->toContain('SQLSTATE')
+        ->not->toContain('db.internal')
+        ->toContain('RuntimeException');
 });

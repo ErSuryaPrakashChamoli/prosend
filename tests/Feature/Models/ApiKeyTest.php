@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\ApiKey;
+use App\Models\ApiKeyDailyUsage;
 use App\Models\User;
 
 it('stores only a hash of the secret and finds the key from its plaintext', function () {
@@ -57,4 +58,38 @@ it('only allows listed IP addresses and ranges when an allowlist is set', functi
     expect($apiKey->allowsIp('203.0.113.9'))->toBeTrue()
         ->and($apiKey->allowsIp('2001:db8::1'))->toBeTrue()
         ->and($apiKey->allowsIp('198.51.100.1'))->toBeFalse();
+});
+
+it('records use at most once a minute, even from several addresses', function () {
+    [$apiKey] = issueApiKey();
+
+    $apiKey->touchLastUsed('10.0.0.1');
+    $this->travel(10)->seconds();
+    $apiKey->refresh()->touchLastUsed('10.0.0.2');
+
+    expect($apiKey->refresh()->last_used_ip)->toBe('10.0.0.1');
+
+    $this->travel(61)->seconds();
+    $apiKey->touchLastUsed('10.0.0.2');
+
+    expect($apiKey->refresh()->last_used_ip)->toBe('10.0.0.2');
+});
+
+it('never reserves more emails than the daily limit allows', function () {
+    [$apiKey] = issueApiKey(['daily_send_limit' => 5]);
+
+    expect(ApiKeyDailyUsage::reserveEmails($apiKey, 3))->toBeTrue()
+        ->and(ApiKeyDailyUsage::reserveEmails($apiKey, 3))->toBeFalse()
+        ->and(ApiKeyDailyUsage::reserveEmails($apiKey, 2))->toBeTrue()
+        ->and($apiKey->emailsQueuedToday())->toBe(5);
+
+    ApiKeyDailyUsage::releaseEmails($apiKey, 2);
+
+    expect($apiKey->emailsQueuedToday())->toBe(3);
+});
+
+it('masks anything that looks like a key, once', function () {
+    expect(ApiKey::redact('GET /x/psk_live_AbC_dEf?k=psk_test_1'))->toBe('GET /x/psk_live_[redacted]?k=psk_test_[redacted]')
+        ->and(ApiKey::redact(ApiKey::redact('psk_live_abc')))->toBe('psk_live_[redacted]')
+        ->and(ApiKey::appearsIn('/api/v1/me'))->toBeFalse();
 });

@@ -3,10 +3,12 @@
 namespace App\Filament\Resources\Campaigns\Schemas;
 
 use App\Enums\AudienceType;
+use App\Enums\CampaignStatus;
 use App\Models\Campaign;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Illuminate\Support\Number;
 
 class CampaignInfolist
 {
@@ -45,6 +47,11 @@ class CampaignInfolist
                         TextEntry::make('subject')
                             ->placeholder('No subject yet')
                             ->columnSpanFull(),
+                        TextEntry::make('review_note')
+                            ->label('Review note')
+                            ->color('warning')
+                            ->visible(fn (Campaign $record): bool => filled($record->review_note))
+                            ->columnSpanFull(),
                     ]),
                 Section::make('Schedule')
                     ->columnSpan(1)
@@ -67,6 +74,17 @@ class CampaignInfolist
                         TextEntry::make('creator.name')
                             ->label('Created by')
                             ->placeholder('—'),
+                        TextEntry::make('submitter.name')
+                            ->label('Submitted by')
+                            ->helperText(fn (Campaign $record): ?string => $record->submitted_at?->toDayDateTimeString())
+                            ->visible(fn (Campaign $record): bool => $record->submitted_at !== null),
+                        TextEntry::make('approver.name')
+                            ->label('Approved by')
+                            ->helperText(fn (Campaign $record): ?string => $record->approved_at
+                                ? $record->approved_at->toDayDateTimeString().' · '.Number::format((int) $record->approved_recipient_count).' recipients approved'
+                                : null)
+                            ->placeholder(fn (Campaign $record): string => $record->status === CampaignStatus::PendingApproval ? 'Waiting for approval' : 'Launched before approval was required')
+                            ->visible(fn (Campaign $record): bool => $record->status !== CampaignStatus::Draft),
                     ]),
             ]);
     }

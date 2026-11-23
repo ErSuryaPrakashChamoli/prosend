@@ -9,6 +9,7 @@ use App\Models\Contact;
 use App\Models\EmailMessage;
 use App\Models\EmailTemplate;
 use App\Models\SenderIdentity;
+use App\Models\SmtpProvider;
 use App\Models\Suppression;
 use App\Models\User;
 use Illuminate\Support\Facades\Queue;
@@ -136,4 +137,16 @@ it('rejects a marketing template for transactional email', function () {
     expect(fn () => app(QueueComposedEmails::class)->handle(composedEmail([
         'email_template_id' => $template->id,
     ]), User::factory()->create()))->toThrow(ValidationException::class, 'This is a Marketing template and cannot be used for Transactional email.');
+});
+
+it('refuses a sandbox sender where sandbox providers are turned off, before anything is queued', function () {
+    Queue::fake([SendEmailMessage::class]);
+    config(['prosend.providers.allow_sandbox' => false]);
+    $sandboxSender = SenderIdentity::factory()->for(SmtpProvider::factory()->mailtrapSandbox()->state(['name' => 'QA sandbox']))->create();
+
+    expect(fn () => app(QueueComposedEmails::class)->handle(composedEmail(['sender_identity_id' => $sandboxSender->id]), User::factory()->sender()->create()))
+        ->toThrow(ValidationException::class, 'The provider QA sandbox is a sandbox, and sandbox providers are turned off in this environment (PROSEND_ALLOW_SANDBOX_PROVIDERS).');
+
+    expect(EmailMessage::query()->count())->toBe(0);
+    Queue::assertNothingPushed();
 });

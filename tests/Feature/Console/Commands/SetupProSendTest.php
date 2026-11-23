@@ -54,3 +54,28 @@ it('creates the first administrator', function () {
         ->email->toBe('ada@acme.test')
         ->role->toBe(UserRole::Admin);
 });
+
+it('imports Mailtrap settings as the matching sandbox or live provider type', function (string $host, ProviderType $type, string $name) {
+    config(['mail.mailers.smtp.host' => $host, 'mail.mailers.smtp.port' => 2525, 'mail.mailers.smtp.username' => 'api']);
+
+    $this->artisan('prosend:setup', ['--skip-admin' => true])->assertSuccessful();
+
+    expect(SmtpProvider::query()->sole())
+        ->type->toBe($type)
+        ->name->toBe($name)
+        ->daily_limit->toBeNull();
+})->with([
+    ['sandbox.smtp.mailtrap.io', ProviderType::MailtrapSandbox, 'Mailtrap Sandbox'],
+    ['live.smtp.mailtrap.io', ProviderType::Mailtrap, 'Mailtrap'],
+    ['bulk.smtp.mailtrap.io', ProviderType::Mailtrap, 'Mailtrap'],
+]);
+
+it('does not guess the type of an unknown Mailtrap host', function () {
+    config(['mail.mailers.smtp.host' => 'smtp.mailtrap.io']);
+
+    $this->artisan('prosend:setup', ['--skip-admin' => true])
+        ->expectsOutputToContain('is a Mailtrap host ProSend does not recognise')
+        ->assertSuccessful();
+
+    expect(SmtpProvider::query()->count())->toBe(0);
+});

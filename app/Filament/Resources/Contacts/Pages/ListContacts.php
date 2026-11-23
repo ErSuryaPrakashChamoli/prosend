@@ -6,13 +6,13 @@ use App\Actions\Contacts\AddContactsFromText;
 use App\Enums\ConsentStatus;
 use App\Filament\Exports\ContactExporter;
 use App\Filament\Imports\ContactImporter;
+use App\Filament\Imports\SpreadsheetImportAction;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Models\ContactList;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\CreateAction;
 use Filament\Actions\ExportAction;
-use Filament\Actions\ImportAction;
 use Filament\Forms\Components\Checkbox;
 use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Select;
@@ -32,8 +32,8 @@ class ListContacts extends ListRecords
     {
         return [
             ActionGroup::make([
-                ImportAction::make()
-                    ->label('Import CSV')
+                SpreadsheetImportAction::make()
+                    ->label('Import CSV or Excel')
                     ->importer(ContactImporter::class)
                     ->icon(Heroicon::OutlinedArrowUpTray),
                 $this->addFromTextAction(),

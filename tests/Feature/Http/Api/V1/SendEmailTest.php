@@ -10,6 +10,7 @@ use App\Models\Contact;
 use App\Models\EmailMessage;
 use App\Models\EmailTemplate;
 use App\Models\SenderIdentity;
+use App\Models\SmtpProvider;
 use App\Models\Suppression;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -189,4 +190,95 @@ it('refuses an attachment type outside the allowed list', function () {
         'attachments' => [['filename' => 'run.exe', 'content' => base64_encode('MZ'), 'content_type' => 'application/x-msdownload']],
     ]))->assertUnprocessable()
         ->assertJsonValidationErrors(['attachments.0.content_type'], 'error.fields');
+});
+
+it('shows API clients that a sandbox captured their email instead of delivering it', function () {
+    FakeMailProviderDriver::install();
+    [, $plaintext] = issueApiKey(senderIdentity: SenderIdentity::factory()->for(SmtpProvider::factory()->mailtrapSandbox())->create(['email' => 'billing@acme.test']));
+
+    $id = $this->withToken($plaintext)->postJson('/api/v1/emails', sendPayload())->assertAccepted()->json('data.0.id');
+
+    $this->withToken($plaintext)->getJson("/api/v1/emails/{$id}")
+        ->assertOk()
+        ->assertJsonPath('data.status', MessageStatus::Captured->value)
+        ->assertJsonPath('data.delivered_at', null);
+    $this->withToken($plaintext)->getJson('/api/v1/emails?status=captured')->assertOk()->assertJsonCount(1, 'data');
+});
+
+it('refuses to queue API email for a sandbox sender where sandboxes are turned off', function () {
+    Queue::fake([SendEmailMessage::class]);
+    config(['prosend.providers.allow_sandbox' => false]);
+    [, $plaintext] = issueApiKey(senderIdentity: SenderIdentity::factory()->for(SmtpProvider::factory()->mailtrapSandbox())->create(['email' => 'billing@acme.test']));
+
+    $this->withToken($plaintext)->postJson('/api/v1/emails', sendPayload())
+        ->assertUnprocessable()
+        ->assertJsonPath('error.code', 'validation_failed');
+
+    Queue::assertNothingPushed();
+});
+
+it('counts CC and BCC addresses toward the daily send limit', function () {
+    Queue::fake([SendEmailMessage::class]);
+    [$apiKey, $plaintext] = issueApiKey(['daily_send_limit' => 3]);
+
+    $this->withToken($plaintext)->postJson('/api/v1/emails', sendPayload(['cc' => ['sam@example.com'], 'bcc' => ['kim@example.com', 'lee@example.com']]))
+        ->assertTooManyRequests()
+        ->assertJsonPath('error.code', 'daily_send_limit_reached');
+
+    $this->withToken($plaintext)->postJson('/api/v1/emails', sendPayload(['cc' => ['sam@example.com'], 'bcc' => ['kim@example.com']]))->assertAccepted();
+
+    expect($apiKey->emailsQueuedToday())->toBe(3);
+});
+
+it('gives the daily allowance back when a send is refused', function () {
+    Queue::fake([SendEmailMessage::class]);
+    [$apiKey, $plaintext] = issueApiKey(['daily_send_limit' => 1]);
+    Suppression::factory()->create(['email' => 'jane@example.com', 'reason' => SuppressionReason::HardBounce]);
+
+    $this->withToken($plaintext)->postJson('/api/v1/emails', sendPayload())->assertUnprocessable();
+
+    expect($apiKey->emailsQueuedToday())->toBe(0);
+});
+
+it('refuses an attachment whose content is not the declared type', function () {
+    Queue::fake([SendEmailMessage::class]);
+    Storage::fake('local');
+    [, $plaintext] = issueApiKey();
+
+    $this->withToken($plaintext)->postJson('/api/v1/emails', sendPayload([
+        'attachments' => [
+            ['filename' => 'terms.pdf', 'content' => base64_encode('%PDF-1.4 terms'), 'content_type' => 'application/pdf'],
+            ['filename' => 'invoice.pdf', 'content' => base64_encode("MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff"), 'content_type' => 'application/pdf'],
+        ],
+    ]))->assertUnprocessable()
+        ->assertJsonPath('error.code', 'validation_failed')
+        ->assertJsonValidationErrors(['attachments.1.content'], 'error.fields');
+
+    expect(Storage::disk('local')->allFiles('email-attachments'))->toBeEmpty();
+    Queue::assertNothingPushed();
+});
+
+it('names an attachment with an extension of its real type', function () {
+    Queue::fake([SendEmailMessage::class]);
+    Storage::fake('local');
+    [, $plaintext] = issueApiKey();
+
+    $this->withToken($plaintext)->postJson('/api/v1/emails', sendPayload([
+        'attachments' => [['filename' => 'setup.exe', 'content' => base64_encode('%PDF-1.4 receipt'), 'content_type' => 'application/pdf']],
+    ]))->assertAccepted();
+
+    $attachment = EmailMessage::query()->sole()->attachments[0];
+    expect($attachment['name'])->toBe('setup.exe.pdf')
+        ->and($attachment['path'])->toEndWith('.pdf');
+});
+
+it('refuses an attachment name with control characters instead of failing', function () {
+    Queue::fake([SendEmailMessage::class]);
+    Storage::fake('local');
+    [, $plaintext] = issueApiKey();
+
+    $this->withToken($plaintext)->postJson('/api/v1/emails', sendPayload([
+        'attachments' => [['filename' => "invoice\r\n.pdf", 'content' => base64_encode('%PDF-1.4 receipt'), 'content_type' => 'application/pdf']],
+    ]))->assertUnprocessable()
+        ->assertJsonValidationErrors(['attachments.0.filename'], 'error.fields');
 });

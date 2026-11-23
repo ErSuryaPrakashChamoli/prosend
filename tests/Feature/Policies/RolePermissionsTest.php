@@ -52,6 +52,22 @@ it('only allows editing draft campaigns', function (CampaignStatus $status, bool
     'completed' => [CampaignStatus::Completed, false],
 ]);
 
+it('lets only administrators approve campaigns waiting for approval', function (UserRole $role) {
+    $user = User::factory()->create(['role' => $role]);
+
+    expect($user->can('approve', Campaign::factory()->pendingApproval()->create()))->toBe($role === UserRole::Admin)
+        ->and($user->can('approve', Campaign::factory()->create()))->toBeFalse();
+})->with('roles');
+
+it('prevents editing a campaign while it waits for approval or once it has started sending', function () {
+    $user = User::factory()->sender()->create();
+    $startedDraft = Campaign::factory()->create(['started_at' => now()]);
+
+    expect($user->can('update', Campaign::factory()->pendingApproval()->create()))->toBeFalse()
+        ->and($user->can('update', $startedDraft))->toBeFalse()
+        ->and($user->can('delete', $startedDraft))->toBeFalse();
+});
+
 it('prevents admins from deleting their own account', function () {
     $admin = User::factory()->admin()->create();
 

@@ -6,6 +6,7 @@ use App\Filament\Resources\SmtpProviders\Pages\CreateSmtpProvider;
 use App\Filament\Resources\SmtpProviders\Pages\EditSmtpProvider;
 use App\Filament\Resources\SmtpProviders\Pages\ListSmtpProviders;
 use App\Filament\Resources\SmtpProviders\Pages\ViewSmtpProvider;
+use App\Filament\Resources\SmtpProviders\RelationManagers\SendAttemptsRelationManager;
 use App\Filament\Resources\SmtpProviders\Schemas\SmtpProviderForm;
 use App\Filament\Resources\SmtpProviders\Schemas\SmtpProviderInfolist;
 use App\Filament\Resources\SmtpProviders\Tables\SmtpProvidersTable;
@@ -44,6 +45,13 @@ class SmtpProviderResource extends Resource
     public static function table(Table $table): Table
     {
         return SmtpProvidersTable::configure($table);
+    }
+
+    public static function getRelations(): array
+    {
+        return [
+            SendAttemptsRelationManager::class,
+        ];
     }
 
     public static function getPages(): array

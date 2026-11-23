@@ -53,4 +53,9 @@ enum UserRole: string implements HasColor, HasDescription, HasLabel
     {
         return $this === self::Admin;
     }
+
+    public function canApproveCampaigns(): bool
+    {
+        return $this === self::Admin;
+    }
 }

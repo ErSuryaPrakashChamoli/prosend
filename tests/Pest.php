@@ -5,6 +5,9 @@ use App\Enums\ApiScope;
 use App\Models\ApiKey;
 use App\Models\SenderIdentity;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
+use OpenSpout\Common\Entity\Row;
+use OpenSpout\Common\Entity\Style\Style;
+use OpenSpout\Writer\XLSX\Writer as XlsxWriter;
 use Tests\TestCase;
 
 /*
@@ -69,4 +72,37 @@ function issueApiKey(array $attributes = [], ?SenderIdentity $senderIdentity = n
     ]);
 
     return [$apiKey, $plaintext, $senderIdentity];
+}
+
+/**
+ * The bytes of an Excel workbook (.xlsx) with the given rows. Dates get a date format, as Excel gives them.
+ *
+ * @param  list<list<mixed>>  $firstSheet
+ * @param  list<list<mixed>>  $secondSheet
+ */
+function xlsxWorkbook(array $firstSheet, array $secondSheet = []): string
+{
+    $base = tempnam(sys_get_temp_dir(), 'prosend-test-');
+    $path = $base.'.xlsx';
+    $dateStyle = (new Style)->setFormat('yyyy-mm-dd hh:mm:ss');
+    $toRow = fn (array $cells): Row => Row::fromValuesWithStyles($cells, columnStyles: array_map(
+        fn (mixed $value): ?Style => $value instanceof DateTimeInterface ? $dateStyle : null,
+        $cells,
+    ));
+
+    $writer = new XlsxWriter;
+    $writer->openToFile($path);
+    $writer->addRows(array_map($toRow, $firstSheet));
+
+    if ($secondSheet !== []) {
+        $writer->addNewSheetAndMakeItCurrent();
+        $writer->addRows(array_map($toRow, $secondSheet));
+    }
+
+    $writer->close();
+    $bytes = (string) file_get_contents($path);
+    unlink($path);
+    unlink($base);
+
+    return $bytes;
 }

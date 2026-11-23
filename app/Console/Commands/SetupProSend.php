@@ -56,12 +56,25 @@ class SetupProSend extends Command
             return;
         }
 
-        $isBrevo = str_contains((string) $config['host'], 'brevo.com');
+        $type = $this->providerTypeFor((string) $config['host']);
+
+        if ($type === null) {
+            $this->components->warn("MAIL_HOST ({$config['host']}) is a Mailtrap host ProSend does not recognise, so it was not imported. Add the provider in the panel and choose Mailtrap Email Sending or Mailtrap Email Sandbox.");
+
+            return;
+        }
+
+        $isBrevo = $type === ProviderType::Brevo;
         $port = (int) ($config['port'] ?? 587);
 
         $provider = SmtpProvider::query()->create([
-            'name' => $isBrevo ? 'Brevo' : 'SMTP',
-            'type' => $isBrevo ? ProviderType::Brevo : ProviderType::Smtp,
+            'name' => match ($type) {
+                ProviderType::Brevo => 'Brevo',
+                ProviderType::Mailtrap => 'Mailtrap',
+                ProviderType::MailtrapSandbox => 'Mailtrap Sandbox',
+                ProviderType::Smtp => 'SMTP',
+            },
+            'type' => $type,
             'host' => $config['host'],
             'port' => $port,
             'encryption' => ($config['scheme'] ?? null) === 'smtps' || $port === 465 ? SmtpEncryption::Tls : SmtpEncryption::StartTls,
@@ -86,6 +99,33 @@ class SetupProSend extends Command
         if ($isBrevo) {
             $this->components->twoColumnDetail('Daily limit', '300 (Brevo free plan). Change it under Infrastructure > SMTP providers.');
         }
+
+        if ($type === ProviderType::MailtrapSandbox) {
+            $this->components->warn('This is a Mailtrap sandbox: email sent through it is captured for inspection and never delivered. Sandbox providers are refused in production unless PROSEND_ALLOW_SANDBOX_PROVIDERS=true.');
+        } elseif ($type === ProviderType::Mailtrap) {
+            $this->components->twoColumnDetail('Limits', 'Not set. Match them to your Mailtrap plan under Infrastructure > SMTP providers.');
+        }
+    }
+
+    /**
+     * Mailtrap's hosts decide whether it is the sandbox or live sending, so they are never imported as generic
+     * SMTP. Null for any other Mailtrap host, which ProSend cannot place on either side.
+     */
+    private function providerTypeFor(string $host): ?ProviderType
+    {
+        $host = strtolower(trim($host));
+
+        foreach ([ProviderType::MailtrapSandbox, ProviderType::Mailtrap] as $type) {
+            if (in_array($host, $type->allowedHosts(), true)) {
+                return $type;
+            }
+        }
+
+        if (ProviderType::Smtp->hostProblem($host) !== null) {
+            return null;
+        }
+
+        return str_contains($host, 'brevo.com') ? ProviderType::Brevo : ProviderType::Smtp;
     }
 
     private function installSampleTemplates(): void

@@ -8,6 +8,7 @@ use App\Models\SmtpProvider;
 use App\Services\Providers\MailProviderDriver;
 use App\Services\Providers\MailProviderManager;
 use App\Services\Providers\ProviderCapabilities;
+use App\Services\Sending\SendFailure;
 use Illuminate\Contracts\Mail\Mailer as MailerContract;
 use Illuminate\Mail\Mailer;
 use Symfony\Component\Mailer\Envelope;
@@ -70,6 +71,11 @@ class FakeMailProviderDriver implements MailProviderDriver, TransportInterface
     public function capabilities(): ProviderCapabilities
     {
         return new ProviderCapabilities(deliveryWebhooks: true);
+    }
+
+    public function classifyFailure(Throwable $exception, SmtpProvider $provider): SendFailure
+    {
+        return SendFailure::fromException($exception, [(string) $provider->username]);
     }
 
     public function send(RawMessage $message, ?Envelope $envelope = null): ?SentMessage

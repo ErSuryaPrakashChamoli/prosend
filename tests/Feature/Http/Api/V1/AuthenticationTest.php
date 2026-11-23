@@ -1,9 +1,11 @@
 <?php
 
+use App\Enums\ApiScope;
 use App\Enums\MessageStatus;
 use App\Models\ApiRequestLog;
 use App\Models\EmailMessage;
 use App\Models\User;
+use Illuminate\Support\Str;
 
 it('returns 401 for a request without an API key', function () {
     $this->getJson('/api/v1/me')
@@ -116,4 +118,54 @@ it('returns 400 for a malformed JSON body', function () {
         ->assertJsonPath('error.code', 'invalid_json');
 
     expect(EmailMessage::query()->whereNot('status', MessageStatus::Queued)->count())->toBe(0);
+});
+
+it('never blocks a valid key because of failed attempts from the same address', function () {
+    [, $plaintext] = issueApiKey();
+
+    foreach (range(1, 25) as $attempt) {
+        $this->withToken('psk_live_AAAAAAAAAAAA_'.str_repeat('b', 40))->getJson('/api/v1/me');
+    }
+
+    $this->withToken('psk_live_AAAAAAAAAAAA_'.str_repeat('b', 40))->getJson('/api/v1/me')->assertTooManyRequests();
+    $this->withToken($plaintext)->getJson('/api/v1/me')->assertOk();
+});
+
+it('lifts the block on an address after 10 minutes', function () {
+    foreach (range(1, 21) as $attempt) {
+        $this->withToken('psk_live_AAAAAAAAAAAA_'.str_repeat('b', 40))->getJson('/api/v1/me');
+    }
+
+    $this->travel(9)->minutes();
+    $this->withToken('psk_live_AAAAAAAAAAAA_'.str_repeat('b', 40))->getJson('/api/v1/me')->assertTooManyRequests();
+
+    $this->travel(2)->minutes();
+    $this->withToken('psk_live_AAAAAAAAAAAA_'.str_repeat('b', 40))->getJson('/api/v1/me')->assertUnauthorized();
+});
+
+it('refuses a key anywhere in the URL and keeps it out of the request log', function () {
+    [, $plaintext] = issueApiKey();
+
+    $this->withToken($plaintext)->getJson("/api/v1/emails/{$plaintext}")
+        ->assertUnauthorized()
+        ->assertJsonPath('error.code', 'key_in_url');
+    $this->withToken($plaintext)->getJson("/api/v1/me?token={$plaintext}")
+        ->assertJsonPath('error.code', 'key_in_url');
+
+    expect(ApiRequestLog::query()->count())->toBe(2)
+        ->and(ApiRequestLog::query()->pluck('path')->implode(' '))->not->toContain(substr($plaintext, 9));
+});
+
+it('lets a key that may read every email read its own', function () {
+    [, $plaintext] = issueApiKey(['scopes' => [ApiScope::EmailsReadAll->value]]);
+
+    $this->withToken($plaintext)->getJson('/api/v1/emails')->assertOk();
+});
+
+it('refuses a key without the read scope before looking the email up', function () {
+    [$apiKey, $plaintext] = issueApiKey(['scopes' => [ApiScope::EmailsSend->value]]);
+    $email = EmailMessage::factory()->create(['api_key_id' => $apiKey->id]);
+
+    $this->withToken($plaintext)->getJson("/api/v1/emails/{$email->uuid}")->assertForbidden()->assertJsonPath('error.code', 'missing_scope');
+    $this->withToken($plaintext)->getJson('/api/v1/emails/'.Str::uuid())->assertForbidden()->assertJsonPath('error.code', 'missing_scope');
 });

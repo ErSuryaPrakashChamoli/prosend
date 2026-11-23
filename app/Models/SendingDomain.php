@@ -28,6 +28,11 @@ class SendingDomain extends Model
     public const BREVO_DKIM_SELECTORS = ['brevo1', 'brevo2', 'mail'];
 
     /**
+     * Mailtrap Email Sending signs with a pair of selectors, each a CNAME to rwmtN.dkim.mailtrap.io.
+     */
+    public const MAILTRAP_DKIM_SELECTORS = ['rwmt1', 'rwmt2'];
+
+    /**
      * @var array<string, mixed>
      */
     protected $attributes = [
@@ -122,7 +127,11 @@ class SendingDomain extends Model
             return array_values($this->dkim_selectors);
         }
 
-        return $this->smtpProvider?->type === ProviderType::Brevo ? self::BREVO_DKIM_SELECTORS : [];
+        return match ($this->smtpProvider?->type) {
+            ProviderType::Brevo => self::BREVO_DKIM_SELECTORS,
+            ProviderType::Mailtrap => self::MAILTRAP_DKIM_SELECTORS,
+            default => [],
+        };
     }
 
     /**

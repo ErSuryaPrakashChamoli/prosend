@@ -35,3 +35,30 @@ it('matches nobody when a required variable name can never have a value', functi
 
     expect(app(TemplateVariables::class)->constrain(Contact::query(), ['Order_Number'])->count())->toBe(0);
 });
+
+it('treats the full name as present when either name part has a value', function () {
+    $firstOnly = Contact::factory()->create(['first_name' => 'Jane', 'last_name' => null]);
+    $lastOnly = Contact::factory()->create(['first_name' => '', 'last_name' => 'Doe']);
+    $nameless = Contact::factory()->create(['first_name' => null, 'last_name' => '']);
+    $variables = app(TemplateVariables::class);
+
+    $ids = $variables->constrain(Contact::query(), ['name'])->orderBy('id')->pluck('id')->all();
+
+    expect($ids)->toBe([$firstOnly->id, $lastOnly->id])
+        ->and($variables->missingFor($nameless, ['name']))->toBe(['name'])
+        ->and($variables->missingFor($lastOnly, ['name', 'job_title']))->toBe(['job_title'])
+        ->and($variables->customAttributes(['name', 'job_title', 'industry', 'website', 'order_number']))->toBe(['order_number']);
+});
+
+it('counts a custom attribute of the same name as a value for a newer built-in', function () {
+    $legacy = Contact::factory()->create(['job_title' => null, 'custom_attributes' => ['job_title' => 'CTO']]);
+    $current = Contact::factory()->create(['job_title' => 'CEO', 'custom_attributes' => null]);
+    $without = Contact::factory()->create(['job_title' => null, 'custom_attributes' => ['other' => 'x']]);
+    $variables = app(TemplateVariables::class);
+
+    $ids = $variables->constrain(Contact::query(), ['job_title'])->orderBy('id')->pluck('id')->all();
+
+    expect($ids)->toBe([$legacy->id, $current->id])
+        ->and($variables->missingFor($legacy, ['job_title']))->toBe([])
+        ->and($variables->missingFor($without, ['job_title']))->toBe(['job_title']);
+});

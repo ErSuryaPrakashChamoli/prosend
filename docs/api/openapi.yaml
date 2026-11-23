@@ -45,6 +45,7 @@ paths:
         Queues one message per recipient (1 to 50). Requires scope `emails:send`; marketing email also needs
         `emails:send_marketing`. The From address must be a sender identity allowed for the key. Suppressed
         recipients, and recipients without consent for marketing, are refused with `recipient_not_eligible`.
+        The key's daily send limit counts every To, CC and BCC address.
       operationId: sendEmail
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -172,9 +173,11 @@ components:
       name: Idempotency-Key
       in: header
       description: |
-        1 to 255 characters, unique per logical request. Retrying with the same key and body returns the original
-        response without sending again, for 24 hours. The same key with a different body returns 422
-        `idempotency_key_reused`; while the first request is running, 409 `idempotency_in_progress`.
+        1 to 255 characters, unique per logical request, compared exactly (case matters). Retrying with the same
+        key and body returns the original response without sending again, for 24 hours. The same key with a
+        different body returns 422 `idempotency_key_reused`; while the first request is running, 409
+        `idempotency_in_progress`. Only successful responses are replayed: after a 4xx, fix the cause and retry
+        with the same key. After a 5xx, retry the same request; anything it already created is returned.
       schema: { type: string, minLength: 1, maxLength: 255 }
   schemas:
     Meta:
@@ -213,6 +216,9 @@ components:
                 - invalid_json
                 - payload_too_large
                 - not_found
+                - unauthenticated
+                - forbidden
+                - http_error
                 - server_error
             message: { type: string }
             fields:
@@ -262,13 +268,14 @@ components:
             required: [filename, content, content_type]
             properties:
               filename: { type: string }
-              content: { type: string, contentEncoding: base64 }
+              content: { type: string, contentEncoding: base64, description: "Checked against content_type: a file whose content is another type is refused. The name the recipient sees always ends in an extension of content_type." }
               content_type:
                 type: string
                 enum: [application/pdf, image/png, image/jpeg, image/gif, text/plain, text/csv, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet]
     EmailStatus:
       type: string
-      enum: [queued, deferred, sending, unknown, accepted, soft_bounced, delivered, failed, bounced, complained, suppressed, cancelled, simulated]
+      description: "`accepted` means the provider took the email, not that it was delivered; only `delivered` confirms delivery. `captured` means a sandbox provider (Mailtrap Email Sandbox) kept the email for inspection and it was never delivered. `simulated` means a test API key was used and nothing was sent."
+      enum: [queued, deferred, sending, unknown, accepted, soft_bounced, delivered, failed, bounced, complained, suppressed, cancelled, simulated, captured]
     Email:
       type: object
       properties:

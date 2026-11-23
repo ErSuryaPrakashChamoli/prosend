@@ -24,6 +24,12 @@ class SmtpProviderInfolist
                     ->schema([
                         TextEntry::make('type')
                             ->badge(),
+                        TextEntry::make('delivery_mode')
+                            ->label('Mode')
+                            ->state(fn (SmtpProvider $record): string => $record->isSandbox() ? 'Sandbox: email is captured, never delivered' : 'Live delivery')
+                            ->badge()
+                            ->color(fn (SmtpProvider $record): string => $record->isSandbox() ? 'warning' : 'success')
+                            ->helperText(fn (SmtpProvider $record): ?string => $record->sendingRefusal()),
                         IconEntry::make('is_enabled')
                             ->label('Enabled')
                             ->boolean(),
@@ -47,7 +53,8 @@ class SmtpProviderInfolist
                     ->schema([
                         TextEntry::make('health_status')
                             ->label('Status')
-                            ->badge(),
+                            ->badge()
+                            ->helperText('From the last connection test or send attempt; not a live check.'),
                         TextEntry::make('last_checked_at')
                             ->label('Last checked')
                             ->since()
@@ -65,7 +72,7 @@ class SmtpProviderInfolist
                     ->columns(3)
                     ->schema([
                         TextEntry::make('accepted_today')
-                            ->label('Accepted today')
+                            ->label(fn (SmtpProvider $record): string => $record->isSandbox() ? 'Captured today' : 'Accepted today')
                             ->state(fn (SmtpProvider $record): string => Number::format($record->acceptedCountSince(now()->startOfDay()))),
                         TextEntry::make('daily_remaining')
                             ->label('Left today')
@@ -87,11 +94,15 @@ class SmtpProviderInfolist
                         TextEntry::make('webhook_status')
                             ->label('Webhook')
                             ->state(fn (SmtpProvider $record): string => match (true) {
+                                $record->isSandbox() => 'Not applicable: a sandbox never delivers email',
+                                $record->type === ProviderType::Mailtrap => 'Not processed yet: Mailtrap sends delivery webhooks, but ProSend does not read them',
                                 ! app(MailProviderManager::class)->driver($record)->capabilities()->deliveryWebhooks => 'Not supported by this provider type',
                                 filled($record->webhook_token_hash) => 'Webhook URL generated',
                                 default => 'Not set up',
                             })
-                            ->helperText('Without webhooks ProSend only knows the provider accepted an email, not whether it was delivered, bounced, or marked as spam.'),
+                            ->helperText(fn (SmtpProvider $record): string => $record->isSandbox()
+                                ? 'Email sent here is marked "Captured in sandbox". Inspect it in Mailtrap.'
+                                : 'Without webhooks ProSend only knows the provider accepted an email, not whether it was delivered, bounced, or marked as spam.'),
                     ]),
             ]);
     }

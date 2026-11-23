@@ -25,6 +25,17 @@ class SystemDnsResolver implements DnsResolver
     }
 
     /**
+     * IPv4 goes through the system resolver, which also reads /etc/hosts, just as opening a connection does.
+     */
+    public function addresses(string $host): array
+    {
+        $ipv4 = gethostbynamel($host) ?: [];
+        $ipv6 = array_map(fn (array $record): string => (string) ($record['ipv6'] ?? ''), $this->lookup($host, DNS_AAAA));
+
+        return array_values(array_unique(array_filter([...$ipv4, ...$ipv6])));
+    }
+
+    /**
      * @return list<array<string, mixed>>
      */
     private function lookup(string $host, int $type): array

@@ -39,7 +39,10 @@ class OutgoingEmail extends Mailable
         return new Content(
             view: 'mail.outgoing',
             text: 'mail.outgoing-text',
-            with: ['senderName' => $this->emailMessage->senderIdentity->name],
+            with: [
+                'senderName' => $this->emailMessage->senderIdentity->name,
+                'postalAddress' => config('prosend.marketing.postal_address'),
+            ],
         );
     }
 

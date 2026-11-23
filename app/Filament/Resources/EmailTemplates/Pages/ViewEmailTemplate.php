@@ -73,9 +73,11 @@ class ViewEmailTemplate extends ViewRecord
                             return;
                         }
 
-                        $notification = Notification::make()->title('Test email: '.$message->status->getLabel())->body($message->error_message ?? 'Sent to '.$message->to_email.'.');
+                        $notification = Notification::make()->title('Test email: '.$message->status->getLabel())->body($message->error_message ?? ($message->status === MessageStatus::Captured
+                            ? 'Captured by the sandbox for inspection. It was not delivered to '.$message->to_email.'.'
+                            : 'Sent to '.$message->to_email.'.'));
 
-                        ($message->status === MessageStatus::Accepted ? $notification->success() : $notification->danger())->send();
+                        (in_array($message->status, [MessageStatus::Accepted, MessageStatus::Captured], true) ? $notification->success() : $notification->danger())->send();
                     }),
                 Action::make('duplicate')
                     ->label('Duplicate')

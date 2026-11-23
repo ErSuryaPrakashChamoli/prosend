@@ -248,7 +248,7 @@ Idempotency-Key: order-1042-receipt
 422 Unprocessable Content
 {
   "error": {
-    "code": "recipient_suppressed",
+    "code": "recipient_not_eligible",
     "message": "jane@example.com is suppressed (Hard bounce).",
     "fields": {"to.0.email": ["suppressed (Hard bounce)"]},
     "request_id": "req_01JD9…"
@@ -682,6 +682,30 @@ You approved every recommendation on 24 October 2026, and M1 is under way. L12 s
 | L19 | Replace the Contacts "Import CSV" action with the approval flow | Replace it; otherwise the approval rule can be bypassed | M3 | Approved |
 | L20 | Contact erasure on request (Spec continuation §19) | Include in M3, with a hashed suppression so an erased address is never re-imported | M3 | Approved |
 | L21 | Keep a copy of this specification in the repository, such as `docs/specs/phase-3.md` | Yes, so future sessions can recover it; this adds a new top-level folder, which needs your approval | None | Approved |
+
+## M1 implementation notes
+
+Built 24–29 October 2026: the sending API (`/api/v1/me`, `POST/GET /api/v1/emails`, `GET /api/v1/emails/{id}`, `GET /api/v1/emails/{id}/events`), API keys in the panel, request logs, daily usage, idempotency, test keys, data retention (`prosend:prune`) and the OpenAPI file `docs/api/openapi.yaml`. An independent review found 6 high, 9 medium and 6 low issues; all are fixed and covered by tests.
+
+Where the build differs from this specification:
+
+| Topic | Specification | As built, and why |
+| --- | --- | --- |
+| Suppressed recipient error | `recipient_suppressed` | `recipient_not_eligible`: the same refusal covers suppression and missing marketing consent. The example in section D is updated. |
+| Provider `send()` / `SendResult` refactor (section F) | M1 groundwork | Deferred to M5. M1 adds only the `email_message_attempts` table, which records every hand-over and its outcome. |
+| Contacts, lists and campaigns endpoints and their scopes | Listed in section D | Not in M1, which is scoped to sending and reading email. |
+| Per-send `variables` (section H) | Not listed | Added as an encrypted `email_messages.variables` column, cleared with the body after 90 days. |
+| Daily usage table name | `api_key_daily_usage` | `api_key_daily_usages`, Laravel's naming. |
+| Idempotency "created resources" (section H) | A column on `idempotency_keys` | Not added. Recovery finds an interrupted request's emails by (API key, Idempotency-Key) instead, and re-queues any that never got a send job. |
+| Unique provider message id on `email_message_attempts` (section H) | Unique index | Stored but not unique: over SMTP it is ProSend's own Message-ID, which a deliberate retry of an "unknown" email reuses. |
+| Idempotency replays | Every response | Only successful responses are replayed. A refused (4xx) request is forgotten, so it can be retried once the cause is fixed. After a server error the key keeps its body fingerprint: only the same request can retry, and it is matched with anything already created. A request holds its key for 5 minutes, longer than any request can run. |
+| Idempotency-Key comparison | Not specified | Exact (case-sensitive). On MySQL this needs migration `2026_10_29_091658`, which is not yet run on the local database. |
+| Daily send limit | Per email | Every To, CC and BCC address counts, reserved atomically before queuing and given back if the send is refused. |
+| Failed-key throttle | 20 per minute, then 10 minutes | As specified, but only invalid keys are throttled: a valid key from the same IP is never blocked. |
+| Client IP behind a proxy | Not specified | New setting `PROSEND_TRUSTED_PROXIES`. Without it, IP allowlists and the throttle see the proxy's address. |
+| API keys in logs | Masked | Masked in request logs and the application log, and any URL containing a key is refused with `key_in_url`. |
+| Attachments | Same limits as Compose | Content must match `content_type`, and the recipient's file name always ends in an extension of that type. |
+| `emails:read_all` | Separate scope | Includes `emails:read`. `emails:send_marketing` requires `emails:send`. |
 
 ## Sources
 

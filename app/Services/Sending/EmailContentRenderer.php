@@ -18,9 +18,13 @@ class EmailContentRenderer
      * @var array<string, string>
      */
     public const MERGE_TAGS = [
+        'name' => 'Full name',
         'first_name' => 'First name',
         'last_name' => 'Last name',
         'company_name' => 'Company',
+        'job_title' => 'Job title',
+        'industry' => 'Industry',
+        'website' => 'Website',
         'email' => 'Email address',
         'unsubscribe_url' => 'Unsubscribe link',
     ];
@@ -80,9 +84,13 @@ class EmailContentRenderer
     public function sampleVariables(string $email): array
     {
         return [
+            'name' => 'Alex Taylor',
             'first_name' => 'Alex',
             'last_name' => 'Taylor',
             'company_name' => 'Example Ltd',
+            'job_title' => 'Head of Operations',
+            'industry' => 'Logistics',
+            'website' => 'https://example.com',
             'email' => $email,
             'unsubscribe_url' => url('/unsubscribe/preview'),
         ];
@@ -108,12 +116,19 @@ class EmailContentRenderer
             ->except(TemplateVariables::ALWAYS_AVAILABLE)
             ->all();
 
+        // Newer built-ins fall back to a custom attribute of the same name, as TemplateVariables::missingFor() does.
+        $orAttribute = fn (string $variable, ?string $value): string => filled($value) ? $value : ($customAttributes[$variable] ?? '');
+
         return [
             ...$customAttributes,
             ...$sendVariables,
+            'name' => $sendVariables['name'] ?? ($contact ? $orAttribute('name', $contact->full_name) : trim((string) $message->to_name)),
             'first_name' => $sendVariables['first_name'] ?? (string) ($contact ? $contact->first_name : $nameParts[0]),
             'last_name' => $sendVariables['last_name'] ?? (string) ($contact ? $contact->last_name : ($nameParts[1] ?? '')),
             'company_name' => $sendVariables['company_name'] ?? (string) $contact?->company,
+            'job_title' => $sendVariables['job_title'] ?? $orAttribute('job_title', $contact?->job_title),
+            'industry' => $sendVariables['industry'] ?? $orAttribute('industry', $contact?->industry),
+            'website' => $sendVariables['website'] ?? $orAttribute('website', $contact?->website),
             'email' => $message->to_email,
             'unsubscribe_url' => (string) $unsubscribeUrl,
         ];

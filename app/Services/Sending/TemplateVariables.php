@@ -21,7 +21,23 @@ class TemplateVariables
         'first_name' => 'first_name',
         'last_name' => 'last_name',
         'company_name' => 'company',
+        'job_title' => 'job_title',
+        'industry' => 'industry',
+        'website' => 'website',
     ];
+
+    /**
+     * The contact's full name, which has a value when either the first or the last name has one.
+     */
+    public const FULL_NAME = 'name';
+
+    /**
+     * Built-in variables added after contacts could already hold them as custom attributes. A contact without
+     * the built-in value falls back to its custom attribute of the same name, so existing content keeps working.
+     *
+     * @var list<string>
+     */
+    public const ATTRIBUTE_FALLBACK = ['name', 'job_title', 'industry', 'website'];
 
     /**
      * Built-in variables that always have a value.
@@ -78,7 +94,9 @@ class TemplateVariables
     {
         return array_values(array_filter(
             $variables,
-            fn (string $variable): bool => ! array_key_exists($variable, self::CONTACT_COLUMNS) && ! in_array($variable, self::ALWAYS_AVAILABLE, true),
+            fn (string $variable): bool => ! array_key_exists($variable, self::CONTACT_COLUMNS)
+                && ! in_array($variable, self::ALWAYS_AVAILABLE, true)
+                && $variable !== self::FULL_NAME,
         ));
     }
 
@@ -95,9 +113,15 @@ class TemplateVariables
                 return false;
             }
 
-            $value = array_key_exists($variable, self::CONTACT_COLUMNS)
-                ? $contact?->{self::CONTACT_COLUMNS[$variable]}
-                : ($contact?->custom_attributes[$variable] ?? null);
+            $value = match (true) {
+                $variable === self::FULL_NAME => $contact?->full_name,
+                array_key_exists($variable, self::CONTACT_COLUMNS) => $contact?->{self::CONTACT_COLUMNS[$variable]},
+                default => $contact?->custom_attributes[$variable] ?? null,
+            };
+
+            if (blank($value) && in_array($variable, self::ATTRIBUTE_FALLBACK, true)) {
+                $value = $contact?->custom_attributes[$variable] ?? null;
+            }
 
             return blank($value);
         }));
@@ -122,11 +146,21 @@ class TemplateVariables
                 return $contacts->whereRaw('1 = 0');
             }
 
-            $column = array_key_exists($variable, self::CONTACT_COLUMNS)
-                ? self::CONTACT_COLUMNS[$variable]
-                : "custom_attributes->{$variable}";
+            $columns = match (true) {
+                $variable === self::FULL_NAME => ['first_name', 'last_name'],
+                array_key_exists($variable, self::CONTACT_COLUMNS) => [self::CONTACT_COLUMNS[$variable]],
+                default => [],
+            };
 
-            $contacts->whereNotNull($column)->where($column, '!=', '');
+            if ($columns === [] || in_array($variable, self::ATTRIBUTE_FALLBACK, true)) {
+                $columns[] = "custom_attributes->{$variable}";
+            }
+
+            $contacts->where(function (Builder $present) use ($columns): void {
+                foreach ($columns as $column) {
+                    $present->orWhere(fn (Builder $filled) => $filled->whereNotNull($column)->where($column, '!=', ''));
+                }
+            });
         }
 
         return $contacts;

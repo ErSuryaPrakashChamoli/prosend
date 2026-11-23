@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\EmailPurpose;
+use App\Filament\Widgets\AudienceOverview;
 use App\Filament\Widgets\BounceRateTrendChart;
 use App\Filament\Widgets\CampaignPerformanceTable;
 use App\Filament\Widgets\DeliveryOutcomeChart;
@@ -83,6 +84,7 @@ class Dashboard extends BaseDashboard
             CampaignPerformanceTable::class,
             OperationsOverview::class,
             QueueThroughputChart::class,
+            AudienceOverview::class,
         ];
     }
 

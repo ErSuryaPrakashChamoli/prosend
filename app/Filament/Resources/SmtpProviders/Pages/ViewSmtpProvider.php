@@ -20,6 +20,7 @@ class ViewSmtpProvider extends ViewRecord
             SmtpProviderActions::sendTestEmail(),
             EditAction::make(),
             ActionGroup::make([
+                SmtpProviderActions::viewSendingHistory(),
                 SmtpProviderActions::generateWebhookUrl(),
                 SmtpProviderActions::toggleEnabled(),
             ])->label('More')->icon(Heroicon::OutlinedEllipsisVertical)->button()->color('gray'),

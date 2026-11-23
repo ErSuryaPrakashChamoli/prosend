@@ -6,6 +6,7 @@ use App\Enums\AudienceType;
 use App\Enums\CampaignStatus;
 use App\Enums\ConsentStatus;
 use App\Enums\EmailPurpose;
+use App\Enums\ProviderType;
 use App\Enums\SuppressionReason;
 use App\Models\Campaign;
 use App\Models\SendingDomain;
@@ -54,8 +55,12 @@ class CampaignReadiness
             $warnings[] = 'The sender identity is not verified. This is only allowed because sender verification is not required in this environment.';
         }
 
+        if ($isMarketing && blank(config('prosend.marketing.postal_address'))) {
+            $warnings[] = 'No business postal address is set (PROSEND_POSTAL_ADDRESS), so the email footer will not include one. Marketing email should; in the US, CAN-SPAM requires it.';
+        }
+
         if ($campaign->senderIdentity !== null) {
-            $warnings = [...$warnings, ...$this->deliverabilityWarnings($campaign, $eligibleCount)];
+            $warnings = [...$warnings, ...$this->providerWarnings($campaign, $eligibleCount), ...$this->deliverabilityWarnings($campaign, $eligibleCount)];
         }
 
         return new ReadinessReport(
@@ -80,8 +85,8 @@ class CampaignReadiness
     {
         $issues = [];
 
-        if ($campaign->status !== CampaignStatus::Draft) {
-            $issues[] = 'Only draft campaigns can be launched.';
+        if (! in_array($campaign->status, [CampaignStatus::Draft, CampaignStatus::PendingApproval], true)) {
+            $issues[] = 'This campaign has already been launched.';
         }
 
         $template = $campaign->emailTemplate;
@@ -106,6 +111,8 @@ class CampaignReadiness
             $issues[] = "The sender {$senderIdentity->email} must be verified with the provider before it can send.";
         } elseif (! $senderIdentity->smtpProvider->is_enabled) {
             $issues[] = "The provider {$senderIdentity->smtpProvider->name} is disabled.";
+        } elseif (($sendingRefusal = $senderIdentity->smtpProvider->sendingRefusal()) !== null) {
+            $issues[] = $sendingRefusal;
         }
 
         if ($audienceCount === 0) {
@@ -122,6 +129,24 @@ class CampaignReadiness
         }
 
         return $issues;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function providerWarnings(Campaign $campaign, int $eligibleCount): array
+    {
+        $provider = $campaign->senderIdentity->smtpProvider;
+
+        if ($provider->isSandbox()) {
+            return ["{$campaign->senderIdentity->email} sends through the sandbox provider {$provider->name}. All ".Number::format($eligibleCount).' emails will be captured there for inspection and none will reach the recipients.'];
+        }
+
+        if ($provider->type === ProviderType::Mailtrap && $campaign->purpose === EmailPurpose::Marketing && strtolower($provider->host) !== 'bulk.smtp.mailtrap.io') {
+            return ["Mailtrap requires marketing email to go through its Bulk Stream (bulk.smtp.mailtrap.io), but {$provider->name} uses {$provider->host}. Use a sender identity on a Mailtrap Bulk Stream provider."];
+        }
+
+        return [];
     }
 
     /**

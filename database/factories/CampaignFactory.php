@@ -52,6 +52,17 @@ class CampaignFactory extends Factory
         ]);
     }
 
+    /**
+     * A campaign submitted for approval, as after SubmitCampaignForApproval.
+     */
+    public function pendingApproval(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => CampaignStatus::PendingApproval,
+            'submitted_at' => now(),
+        ]);
+    }
+
     public function status(CampaignStatus $status): static
     {
         return $this->state(fn (array $attributes) => [

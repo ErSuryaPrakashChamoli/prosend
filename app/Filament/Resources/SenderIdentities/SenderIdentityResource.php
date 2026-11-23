@@ -3,11 +3,14 @@
 namespace App\Filament\Resources\SenderIdentities;
 
 use App\Actions\Deliverability\CheckSenderWithProvider;
+use App\Enums\ProviderType;
 use App\Filament\Resources\SenderIdentities\Pages\ManageSenderIdentities;
 use App\Models\SenderIdentity;
+use App\Models\SmtpProvider;
 use App\Services\AuditLogger;
 use App\Services\Providers\Brevo\BrevoApiException;
 use BackedEnum;
+use Closure;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\DeleteAction;
@@ -42,8 +45,19 @@ class SenderIdentityResource extends Resource
                 Select::make('smtp_provider_id')
                     ->label('Provider')
                     ->relationship('smtpProvider', 'name')
+                    ->getOptionLabelFromRecordUsing(fn (SmtpProvider $provider): string => $provider->name.($provider->isSandbox() ? ' (sandbox: captured, not delivered)' : ''))
                     ->preload()
-                    ->required(),
+                    ->required()
+                    ->rules([
+                        fn (?SenderIdentity $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($record): void {
+                            $problem = $record?->providerChangeProblem(SmtpProvider::query()->find($value));
+
+                            if ($problem !== null) {
+                                $fail($problem);
+                            }
+                        },
+                    ])
+                    ->helperText('All email from this address goes through this provider, including email already queued. Changing it removes the verification and is recorded in the audit log.'),
                 TextInput::make('name')
                     ->label('From name')
                     ->required()
@@ -76,7 +90,8 @@ class SenderIdentityResource extends Resource
                     ->description(fn (SenderIdentity $record): string => $record->name)
                     ->searchable(['email', 'name']),
                 TextColumn::make('smtpProvider.name')
-                    ->label('Provider'),
+                    ->label('Provider')
+                    ->description(fn (SenderIdentity $record): ?string => $record->smtpProvider->isSandbox() ? 'Sandbox: captured, not delivered' : null),
                 TextColumn::make('verification')
                     ->state(fn (SenderIdentity $record): string => $record->isVerified() ? 'Verified' : 'Not verified')
                     ->badge()
@@ -119,7 +134,12 @@ class SenderIdentityResource extends Resource
                     ->visible(fn (SenderIdentity $record): bool => ! $record->isVerified() && ! CheckSenderWithProvider::isAvailable($record) && static::canEdit($record))
                     ->requiresConfirmation()
                     ->modalHeading('Confirm sender verification')
-                    ->modalDescription(fn (SenderIdentity $record): string => "Only confirm after {$record->email} (or its domain) shows as verified in your provider. In Brevo: Senders, Domains & Dedicated IPs. ProSend cannot check this automatically yet, and unverified senders are rejected or land in spam.")
+                    ->modalDescription(fn (SenderIdentity $record): string => "Only confirm after {$record->email} (or its domain) shows as verified in your provider. ".match ($record->smtpProvider->type) {
+                        ProviderType::Brevo => 'In Brevo: Senders, Domains & Dedicated IPs.',
+                        ProviderType::Mailtrap => 'In Mailtrap: Sending Domains, where the domain must show as verified and compliant.',
+                        ProviderType::MailtrapSandbox => 'A sandbox accepts any From address, so this only matters where sender verification is required.',
+                        ProviderType::Smtp => 'Check your provider\'s sender or domain settings.',
+                    }.' ProSend cannot check this automatically for this provider, and unverified senders are rejected or land in spam.')
                     ->action(function (SenderIdentity $record, AuditLogger $auditLogger): void {
                         $record->markVerified(auth()->user());
                         $auditLogger->record('sender.verified', $record, ['email' => $record->email]);

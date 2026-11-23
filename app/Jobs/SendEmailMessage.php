@@ -11,6 +11,7 @@ use App\Models\EmailMessage;
 use App\Models\EmailMessageAttempt;
 use App\Models\SmtpProvider;
 use App\Models\WarmupPlan;
+use App\Services\Providers\MailProviderManager;
 use App\Services\Sending\EmailSender;
 use App\Services\Sending\RecipientEligibility;
 use App\Services\Sending\SendFailure;
@@ -23,6 +24,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 use Symfony\Component\Mailer\Exception\TransportExceptionInterface;
 use Symfony\Component\Mime\Exception\RfcComplianceException;
 use Throwable;
@@ -30,6 +32,10 @@ use Throwable;
 /**
  * Sends one email message. The message row is the source of truth: it is claimed atomically before
  * the provider is contacted, so a retried or duplicated job can never send the same message twice.
+ *
+ * The provider is the sender identity's provider at the moment of sending, never a fallback. A sender
+ * identity cannot move between a sandbox and a live provider while it has email waiting, so queued email
+ * always goes to the environment it was queued for.
  */
 class SendEmailMessage implements ShouldQueue
 {
@@ -59,7 +65,7 @@ class SendEmailMessage implements ShouldQueue
         return $dueAt->addDays(2);
     }
 
-    public function handle(EmailSender $sender, RecipientEligibility $eligibility, WarmupGate $warmupGate): void
+    public function handle(EmailSender $sender, RecipientEligibility $eligibility, WarmupGate $warmupGate, MailProviderManager $providers): void
     {
         $message = $this->message->refresh();
 
@@ -86,6 +92,12 @@ class SendEmailMessage implements ShouldQueue
             return;
         }
 
+        if ($message->contentWasPruned()) {
+            $message->markFailed('The content of this email was deleted under the data retention policy, so it can no longer be sent.');
+
+            return;
+        }
+
         $blockReason = $eligibility->blockReasonForMessage($message);
 
         if ($blockReason !== null) {
@@ -96,6 +108,17 @@ class SendEmailMessage implements ShouldQueue
         }
 
         $senderIdentity = $message->senderIdentity;
+        $provider = $senderIdentity->smtpProvider;
+
+        // Fixed before any check that can fail the message, so a retry is always held to the first answer.
+        $environmentProblem = $message->environmentProblem($provider);
+
+        if ($environmentProblem !== null) {
+            $message->markFailed($environmentProblem);
+            $message->campaign?->syncCompletionStatus();
+
+            return;
+        }
 
         if (! $senderIdentity->canSend()) {
             $message->markFailed("The sender identity {$senderIdentity->email} is not verified.", retryable: true);
@@ -104,11 +127,18 @@ class SendEmailMessage implements ShouldQueue
             return;
         }
 
-        $provider = $senderIdentity->smtpProvider;
-
         if (! $provider->is_enabled) {
             $message->markDeferred("The provider {$provider->name} is disabled.");
             $this->release(900);
+
+            return;
+        }
+
+        $sendingRefusal = $provider->sendingRefusal();
+
+        if ($sendingRefusal !== null) {
+            $message->markFailed($sendingRefusal, retryable: true);
+            $message->campaign?->syncCompletionStatus();
 
             return;
         }
@@ -128,7 +158,7 @@ class SendEmailMessage implements ShouldQueue
             return;
         }
 
-        $rateLimitWait = $this->rateLimitWait($provider, $warmupPlan);
+        $rateLimitWait = $this->rateLimitWait($provider, $warmupPlan, $message->to_email);
 
         if ($rateLimitWait !== null) {
             $this->release($rateLimitWait);
@@ -145,15 +175,21 @@ class SendEmailMessage implements ShouldQueue
         try {
             $sender->send($message, $provider);
         } catch (TransportExceptionInterface|RfcComplianceException $exception) {
-            $failure = SendFailure::fromException($exception, [(string) $provider->username]);
-            $attempt->finish($this->attemptOutcome($failure), $failure->code, $failure->summary);
+            $failure = $providers->driver($provider)->classifyFailure($exception, $provider);
+            $this->finishAttempt($attempt, $this->attemptOutcome($failure), $failure->code, $failure->summary);
             $this->handleFailure($message, $provider, $failure);
 
             return;
         }
 
-        $attempt->finish(EmailMessageAttempt::OUTCOME_ACCEPTED);
-        $message->markAccepted($provider);
+        // The message's own status comes first: it is what prevents a duplicate send.
+        if ($provider->isSandbox()) {
+            $message->markCaptured($provider);
+            $this->finishAttempt($attempt, EmailMessageAttempt::OUTCOME_CAPTURED);
+        } else {
+            $message->markAccepted($provider);
+            $this->finishAttempt($attempt, EmailMessageAttempt::OUTCOME_ACCEPTED);
+        }
 
         if ($provider->health_status !== ProviderHealth::Healthy) {
             $provider->recordConnectionSuccess();
@@ -176,7 +212,9 @@ class SendEmailMessage implements ShouldQueue
         if ($message->status === MessageStatus::Sending) {
             $message->markAmbiguous('The send job stopped unexpectedly while the message was being submitted.');
         } elseif ($message->status->isAwaitingSend()) {
-            $message->markFailed('Sending stopped after repeated errors: '.($exception?->getMessage() ?? 'unknown error'), retryable: true);
+            // Exception messages can hold database or server details, and this text is shown to API clients, so only
+            // the exception's type is kept here. The full error is in the application log.
+            $message->markFailed('Sending stopped after repeated unexpected errors'.($exception ? ' ('.class_basename($exception).')' : '').'. The details are in the application log.', retryable: true);
         }
 
         $message->campaign?->syncCompletionStatus();
@@ -223,14 +261,19 @@ class SendEmailMessage implements ShouldQueue
     }
 
     /**
-     * Seconds to wait when the provider's or the warm-up plan's per-minute limit is used up. Checked only
-     * after every other gate, so email that is waiting for another reason does not use up the budget.
+     * Seconds to wait when the provider's, the warm-up plan's, or the recipient domain's per-minute limit is
+     * used up. Checked only after every other gate, so email that is waiting for another reason does not use
+     * up the budget.
      */
-    private function rateLimitWait(SmtpProvider $provider, ?WarmupPlan $plan): ?int
+    private function rateLimitWait(SmtpProvider $provider, ?WarmupPlan $plan, string $recipientEmail): ?int
     {
+        $recipientDomain = Str::lower(Str::afterLast($recipientEmail, '@'));
+
         $limits = array_filter([
             "smtp-provider:{$provider->getKey()}" => $provider->max_per_minute,
             "warmup-plan:{$plan?->getKey()}" => $plan?->max_per_minute,
+            // Read as a whole array: domain names contain dots, which config() would treat as nested keys.
+            "recipient-domain:{$recipientDomain}" => config('prosend.sending.recipient_domain_limits', [])[$recipientDomain] ?? null,
         ]);
 
         foreach ($limits as $key => $perMinute) {
@@ -244,6 +287,18 @@ class SendEmailMessage implements ShouldQueue
         }
 
         return null;
+    }
+
+    /**
+     * The attempt record is an audit trail. Failing to write it must not stop the message's own status from being recorded.
+     */
+    private function finishAttempt(EmailMessageAttempt $attempt, string $outcome, ?string $code = null, ?string $summary = null): void
+    {
+        try {
+            $attempt->finish($outcome, $code, $summary);
+        } catch (Throwable $exception) {
+            report($exception);
+        }
     }
 
     private function attemptOutcome(SendFailure $failure): string

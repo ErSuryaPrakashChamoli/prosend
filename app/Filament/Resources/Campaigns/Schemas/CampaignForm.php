@@ -58,7 +58,7 @@ class CampaignForm
                             ->label('Send at')
                             ->seconds(false)
                             ->minDate(now()->startOfMinute())
-                            ->helperText('Leave empty to start sending as soon as you launch.'),
+                            ->helperText('Leave empty to start sending as soon as an administrator approves it.'),
                     ]),
                 Section::make('Audience')
                     ->description('Suppressed and unsubscribed contacts, and contacts without consent for marketing, are skipped automatically.')
@@ -95,8 +95,10 @@ class CampaignForm
                     ->schema([
                         Select::make('sender_identity_id')
                             ->label('From')
-                            ->relationship('senderIdentity', 'email', fn ($query) => $query->usable())
-                            ->getOptionLabelFromRecordUsing(fn (SenderIdentity $record): string => "{$record->name} <{$record->email}>".($record->isVerified() ? '' : ' (unverified)'))
+                            ->relationship('senderIdentity', 'email', fn ($query) => $query->usable()->with('smtpProvider'))
+                            ->getOptionLabelFromRecordUsing(fn (SenderIdentity $record): string => "{$record->name} <{$record->email}>"
+                                .($record->isVerified() ? '' : ' (unverified)')
+                                .($record->smtpProvider->isSandbox() ? ' (sandbox: captured, not delivered)' : ''))
                             ->preload()
                             ->searchable()
                             ->helperText('Only verified sender identities on enabled providers are listed.'),

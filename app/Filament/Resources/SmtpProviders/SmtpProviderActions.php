@@ -5,9 +5,10 @@ namespace App\Filament\Resources\SmtpProviders;
 use App\Actions\Messages\SendTestEmail;
 use App\Enums\MessageStatus;
 use App\Enums\ProviderType;
+use App\Filament\Resources\EmailMessages\EmailMessageResource;
 use App\Models\SmtpProvider;
+use App\Services\AuditLogger;
 use App\Services\Providers\MailProviderManager;
-use App\Services\Sending\SendFailure;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
 use Filament\Notifications\Notification;
@@ -20,17 +21,24 @@ use Symfony\Component\Mailer\Exception\TransportExceptionInterface;
  */
 class SmtpProviderActions
 {
+    /**
+     * Connects and signs in without sending anything. Success proves the settings work, not that email
+     * will be delivered.
+     */
     public static function testConnection(): Action
     {
         return Action::make('testConnection')
             ->label('Test connection')
             ->icon(Heroicon::OutlinedSignal)
-            ->action(function (SmtpProvider $record, MailProviderManager $providers): void {
+            ->action(function (SmtpProvider $record, MailProviderManager $providers, AuditLogger $auditLogger): void {
+                $driver = $providers->driver($record);
+
                 try {
-                    $providers->driver($record)->testConnection($record);
+                    $driver->testConnection($record);
                 } catch (TransportExceptionInterface $exception) {
-                    $summary = SendFailure::fromException($exception, [(string) $record->username])->summary;
+                    $summary = $driver->classifyFailure($exception, $record)->summary;
                     $record->recordConnectionFailure($summary);
+                    $auditLogger->record('provider.connection_tested', $record, ['result' => 'failed', 'error' => $record->last_error]);
 
                     Notification::make()->danger()->title('Connection failed')->body($summary)->persistent()->send();
 
@@ -38,8 +46,13 @@ class SmtpProviderActions
                 }
 
                 $record->recordConnectionSuccess();
+                $auditLogger->record('provider.connection_tested', $record, ['result' => 'connected']);
 
-                Notification::make()->success()->title('Connected and signed in to '.$record->host)->send();
+                Notification::make()
+                    ->success()
+                    ->title(filled($record->username) ? "Connected and signed in to {$record->host}" : "Connected to {$record->host} (no login configured)")
+                    ->body('No email was sent. Send a test email to check the whole sending path.')
+                    ->send();
             });
     }
 
@@ -48,7 +61,9 @@ class SmtpProviderActions
         return Action::make('sendTestEmail')
             ->label('Send test email')
             ->icon(Heroicon::OutlinedPaperAirplane)
-            ->modalDescription(fn (): string => 'Sends a short test email to '.auth()->user()->email.' through this provider.')
+            ->modalDescription(fn (SmtpProvider $record): string => $record->isSandbox()
+                ? 'Sends a short test email through this sandbox. Mailtrap captures it for inspection; it is not delivered to '.auth()->user()->email.'.'
+                : 'Sends a short test email to '.auth()->user()->email.' through this provider.')
             ->schema(fn (SmtpProvider $record): array => [
                 Select::make('sender_identity_id')
                     ->label('From')
@@ -71,9 +86,12 @@ class SmtpProviderActions
 
                 $notification = Notification::make()
                     ->title('Test email: '.$message->status->getLabel())
-                    ->body($message->error_message ?? 'Check the inbox (and spam folder) of '.$message->to_email.'.');
+                    ->body($message->error_message ?? match ($message->status) {
+                        MessageStatus::Captured => 'Open the sandbox in Mailtrap to inspect it. It was not delivered to '.$message->to_email.'.',
+                        default => 'The provider accepted it, which does not prove delivery. Check the inbox (and spam folder) of '.$message->to_email.'.',
+                    });
 
-                ($message->status === MessageStatus::Accepted ? $notification->success() : $notification->danger())->send();
+                (in_array($message->status, [MessageStatus::Accepted, MessageStatus::Captured], true) ? $notification->success() : $notification->danger())->send();
             });
     }
 
@@ -92,6 +110,18 @@ class SmtpProviderActions
 
                 Notification::make()->success()->title($record->is_enabled ? 'Provider enabled' : 'Provider disabled')->send();
             });
+    }
+
+    /**
+     * Emails this provider accepted or captured. Failed hand-overs are listed under Send attempts.
+     */
+    public static function viewSendingHistory(): Action
+    {
+        return Action::make('viewSendingHistory')
+            ->label('Sending history')
+            ->icon(Heroicon::OutlinedInboxStack)
+            ->color('gray')
+            ->url(fn (SmtpProvider $record): string => EmailMessageResource::getUrl('index', ['filters' => ['smtpProvider' => ['value' => $record->getKey()]]]));
     }
 
     public static function generateWebhookUrl(): Action

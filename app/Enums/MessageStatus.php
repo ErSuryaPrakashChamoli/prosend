@@ -21,6 +21,7 @@ enum MessageStatus: string implements HasColor, HasDescription, HasLabel
     case Suppressed = 'suppressed';
     case Cancelled = 'cancelled';
     case Simulated = 'simulated';
+    case Captured = 'captured';
 
     public function getLabel(): string
     {
@@ -38,6 +39,7 @@ enum MessageStatus: string implements HasColor, HasDescription, HasLabel
             self::Suppressed => 'Skipped (suppressed)',
             self::Cancelled => 'Cancelled',
             self::Simulated => 'Test (not sent)',
+            self::Captured => 'Captured in sandbox',
         };
     }
 
@@ -57,6 +59,7 @@ enum MessageStatus: string implements HasColor, HasDescription, HasLabel
             self::Suppressed => 'Not sent because the address is on the suppression list or has not consented.',
             self::Cancelled => 'Not sent because the email or campaign was cancelled.',
             self::Simulated => 'Created with a test API key. It was validated and recorded but never sent.',
+            self::Captured => 'A sandbox provider captured the message for inspection. It was not delivered to the recipient.',
         };
     }
 
@@ -68,7 +71,7 @@ enum MessageStatus: string implements HasColor, HasDescription, HasLabel
             self::Accepted => 'primary',
             self::Delivered => 'success',
             self::Failed, self::Bounced, self::Complained => 'danger',
-            self::Suppressed, self::Cancelled, self::Simulated => 'gray',
+            self::Suppressed, self::Cancelled, self::Simulated, self::Captured => 'gray',
         };
     }
 
@@ -96,11 +99,21 @@ enum MessageStatus: string implements HasColor, HasDescription, HasLabel
     }
 
     /**
+     * Statuses for messages that never went to a real recipient, so they are left out of delivery reports.
+     *
+     * @return list<self>
+     */
+    public static function excludedFromReports(): array
+    {
+        return [self::Simulated, self::Captured];
+    }
+
+    /**
      * Provider events may arrive out of order, so a later event only replaces a status that it outranks.
      */
     public function canBeReplacedBy(self $next): bool
     {
-        if (in_array($this, [self::Suppressed, self::Cancelled, self::Simulated], true)) {
+        if (in_array($this, [self::Suppressed, self::Cancelled, self::Simulated, self::Captured], true)) {
             return false;
         }
 
@@ -113,7 +126,7 @@ enum MessageStatus: string implements HasColor, HasDescription, HasLabel
             self::Queued, self::Suppressed, self::Cancelled, self::Simulated => 0,
             self::Deferred, self::Sending => 1,
             self::Unknown => 2,
-            self::Accepted => 3,
+            self::Accepted, self::Captured => 3,
             self::SoftBounced => 4,
             self::Delivered => 5,
             self::Failed, self::Bounced => 6,

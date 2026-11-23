@@ -72,3 +72,32 @@ it('removes an unsafe link built from contact data', function () {
 
     expect(app(EmailContentRenderer::class)->render($message)->html)->not->toContain('javascript:');
 });
+
+it('fills the full name and prospect details from the contact', function () {
+    $contact = Contact::factory()->create(['first_name' => 'Jane', 'last_name' => 'Doe', 'job_title' => 'Head of Operations', 'industry' => 'Logistics', 'website' => 'acme.test']);
+    $message = EmailMessage::factory()->for($contact)->create(['subject' => '{{ name }}, {{ job_title }} in {{ industry }} at {{ website }}']);
+
+    expect(app(EmailContentRenderer::class)->render($message)->subject)->toBe('Jane Doe, Head of Operations in Logistics at https://acme.test');
+});
+
+it('escapes a job title inserted into the body', function () {
+    $contact = Contact::factory()->create(['job_title' => '<script>alert(1)</script>CEO']);
+    $message = EmailMessage::factory()->for($contact)->create(['html_body' => '<p>Dear {{ job_title }}</p>']);
+
+    expect(app(EmailContentRenderer::class)->render($message)->html)
+        ->toContain('&lt;script&gt;')
+        ->not->toContain('<script>');
+});
+
+it('falls back to a custom attribute for a newer built-in the contact has no value for', function () {
+    $contact = Contact::factory()->create([
+        'first_name' => null,
+        'last_name' => null,
+        'job_title' => null,
+        'website' => 'https://acme.test',
+        'custom_attributes' => ['name' => 'Dr. Jane', 'job_title' => 'CTO', 'website' => 'https://legacy.test'],
+    ]);
+    $message = EmailMessage::factory()->for($contact)->create(['subject' => '{{ name }} | {{ job_title }} | {{ website }}']);
+
+    expect(app(EmailContentRenderer::class)->render($message)->subject)->toBe('Dr. Jane | CTO | https://acme.test');
+});

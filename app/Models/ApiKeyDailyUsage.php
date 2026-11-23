@@ -48,6 +48,48 @@ class ApiKeyDailyUsage extends Model
     }
 
     /**
+     * Reserve room for emails under the key's daily send limit. The check and the increment are one conditional
+     * UPDATE, so concurrent requests cannot together go over the limit. Returns false when they would.
+     */
+    public static function reserveEmails(ApiKey $key, int $emails): bool
+    {
+        if ($key->daily_send_limit === null) {
+            static::add($key, ['emails_queued' => $emails]);
+
+            return true;
+        }
+
+        static::query()->insertOrIgnore([
+            'api_key_id' => $key->getKey(),
+            'date' => now()->toDateString(),
+            'requests' => 0,
+            'emails_queued' => 0,
+            'client_errors' => 0,
+            'server_errors' => 0,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return static::query()
+            ->where('api_key_id', $key->getKey())
+            ->where('date', now()->toDateString())
+            ->where('emails_queued', '<=', $key->daily_send_limit - $emails)
+            ->update(['emails_queued' => DB::raw('emails_queued + '.$emails), 'updated_at' => now()]) === 1;
+    }
+
+    /**
+     * Give back a reservation for emails that were not queued after all.
+     */
+    public static function releaseEmails(ApiKey $key, int $emails): void
+    {
+        static::query()
+            ->where('api_key_id', $key->getKey())
+            ->where('date', now()->toDateString())
+            ->where('emails_queued', '>=', $emails)
+            ->update(['emails_queued' => DB::raw('emails_queued - '.$emails), 'updated_at' => now()]);
+    }
+
+    /**
      * @return BelongsTo<ApiKey, $this>
      */
     public function apiKey(): BelongsTo

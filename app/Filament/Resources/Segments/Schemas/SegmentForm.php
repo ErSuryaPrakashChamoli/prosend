@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Segments\Schemas;
 
 use App\Enums\ConsentStatus;
+use App\Enums\ContactStage;
 use App\Enums\SegmentMatch;
 use App\Models\ContactList;
 use App\Services\Segments\SegmentQuery;
@@ -82,9 +83,12 @@ class SegmentForm
             Block::make('email_domain')->label($labels['email_domain'])->icon('heroicon-o-at-symbol')->schema([
                 TextInput::make('domain')->placeholder('example.com')->required()->maxLength(255),
             ]),
-            Block::make('company')->label($labels['company'])->icon('heroicon-o-building-office')->columns(2)->schema([
-                Select::make('operator')->options(['contains' => 'Contains', 'is_empty' => 'Is empty', 'is_not_empty' => 'Is not empty'])->default('contains')->required()->live(),
-                TextInput::make('value')->maxLength(255)->visible(fn (Get $get): bool => $get('operator') === 'contains')->required(fn (Get $get): bool => $get('operator') === 'contains'),
+            static::textBlock('company', 'heroicon-o-building-office'),
+            static::textBlock('job_title', 'heroicon-o-briefcase'),
+            static::textBlock('industry', 'heroicon-o-building-storefront'),
+            static::textBlock('source', 'heroicon-o-arrow-down-tray'),
+            Block::make('stage')->label($labels['stage'])->icon('heroicon-o-funnel')->schema([
+                Select::make('stages')->label('Stage is any of')->options(ContactStage::class)->multiple()->required(),
             ]),
             Block::make('custom_attribute')->label($labels['custom_attribute'])->icon('heroicon-o-variable')->columns(3)->schema([
                 TextInput::make('key')->label('Attribute')->required()->regex(TemplateVariables::KEY_PATTERN)->validationMessages(['regex' => 'Use lowercase letters, numbers, and underscores.']),
@@ -108,5 +112,16 @@ class SegmentForm
                 TextInput::make('days')->label('In the last … days')->numeric()->integer()->minValue(1)->default(7)->required(),
             ]),
         ];
+    }
+
+    /**
+     * A rule on a text column: contains a value, is empty, or is not empty.
+     */
+    private static function textBlock(string $type, string $icon): Block
+    {
+        return Block::make($type)->label(SegmentQuery::RULE_TYPES[$type])->icon($icon)->columns(2)->schema([
+            Select::make('operator')->options(['contains' => 'Contains', 'is_empty' => 'Is empty', 'is_not_empty' => 'Is not empty'])->default('contains')->required()->live(),
+            TextInput::make('value')->maxLength(255)->visible(fn (Get $get): bool => $get('operator') === 'contains')->required(fn (Get $get): bool => $get('operator') === 'contains'),
+        ]);
     }
 }

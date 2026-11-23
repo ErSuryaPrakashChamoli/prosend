@@ -6,6 +6,7 @@ use App\Exceptions\ApiException;
 use App\Models\ApiKey;
 use App\Models\IdempotencyKey;
 use Closure;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -17,7 +18,11 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class HandleIdempotency
 {
-    private const LOCK_SECONDS = 60;
+    /**
+     * How long a request holds its key. Far longer than PHP and the web server let a request run, so a claim
+     * is only taken over from a request that has really stopped, never from one still sending.
+     */
+    public const LOCK_SECONDS = 300;
 
     public function handle(Request $request, Closure $next): Response
     {
@@ -41,11 +46,18 @@ class HandleIdempotency
             $record = null;
         }
 
-        if ($record !== null) {
-            return $this->replay($record, $requestHash);
+        if ($record === null && $this->claim($apiKey, $key, $requestHash)) {
+            return $this->process($request, $next, $apiKey, $key);
         }
 
-        $claimed = IdempotencyKey::query()->insertOrIgnore([
+        $record ??= IdempotencyKey::query()->whereBelongsTo($apiKey)->where('key', $key)->firstOrFail();
+
+        return $this->replay($record, $requestHash) ?? $this->process($request, $next, $apiKey, $key);
+    }
+
+    private function claim(ApiKey $apiKey, string $key, string $requestHash): bool
+    {
+        return IdempotencyKey::query()->insertOrIgnore([
             'api_key_id' => $apiKey->getKey(),
             'key' => $key,
             'request_hash' => $requestHash,
@@ -53,46 +65,59 @@ class HandleIdempotency
             'locked_until' => now()->addSeconds(self::LOCK_SECONDS),
             'created_at' => now(),
             'updated_at' => now(),
-        ]);
+        ]) === 1;
+    }
 
-        if ($claimed === 0) {
-            return $this->replay(IdempotencyKey::query()->whereBelongsTo($apiKey)->where('key', $key)->firstOrFail(), $requestHash);
-        }
-
+    private function process(Request $request, Closure $next, ApiKey $apiKey, string $key): Response
+    {
         $request->attributes->set('idempotency_key', $key);
         $response = $next($request);
+        $record = IdempotencyKey::query()->whereBelongsTo($apiKey)->where('key', $key);
 
-        // A server error may be fixed by retrying, so it is not remembered.
-        if ($response->getStatusCode() >= 500) {
-            IdempotencyKey::query()->whereBelongsTo($apiKey)->where('key', $key)->delete();
-        } else {
-            IdempotencyKey::query()->whereBelongsTo($apiKey)->where('key', $key)->update([
+        if ($response->isSuccessful()) {
+            $record->update([
                 'status' => IdempotencyKey::STATUS_COMPLETED,
                 'response_status' => $response->getStatusCode(),
                 'response_body' => $response->getContent(),
                 'locked_until' => null,
                 'updated_at' => now(),
             ]);
+        } elseif ($response->getStatusCode() >= 500) {
+            // The request may have stopped after creating emails. Keep the key and its body: a retry of the same
+            // request takes the claim over and is matched with what was created, and a different body is still refused.
+            $record->update(['locked_until' => now(), 'updated_at' => now()]);
+        } else {
+            // A refused request created nothing, so forget it: the client can retry once the cause is fixed.
+            $record->delete();
         }
 
         return $response;
     }
 
-    private function replay(IdempotencyKey $record, string $requestHash): Response
+    /**
+     * The stored response of a finished request, or null when this request took over the claim of an earlier
+     * attempt that stopped. Two retries can never both take over: the claim is taken with one conditional UPDATE.
+     */
+    private function replay(IdempotencyKey $record, string $requestHash): ?Response
     {
         if (! hash_equals($record->request_hash, $requestHash)) {
             throw new ApiException(422, 'idempotency_key_reused', 'This Idempotency-Key was already used with a different request.');
         }
 
         if ($record->status !== IdempotencyKey::STATUS_COMPLETED) {
-            if ($record->isProcessing()) {
-                throw new ApiException(409, 'idempotency_in_progress', 'A request with this Idempotency-Key is still being processed. Retry shortly.', headers: ['Retry-After' => self::LOCK_SECONDS]);
+            $takenOver = IdempotencyKey::query()
+                ->whereKey($record->getKey())
+                ->where('status', IdempotencyKey::STATUS_PROCESSING)
+                ->where(fn (Builder $query) => $query->whereNull('locked_until')->orWhere('locked_until', '<=', now()))
+                ->update(['locked_until' => now()->addSeconds(self::LOCK_SECONDS), 'updated_at' => now()]);
+
+            if ($takenOver === 0) {
+                throw new ApiException(409, 'idempotency_in_progress', 'A request with this Idempotency-Key is still being processed. Retry shortly.', headers: [
+                    'Retry-After' => max(1, (int) ceil(now()->diffInSeconds($record->locked_until, absolute: false))),
+                ]);
             }
 
-            // The first attempt stopped without finishing. The controller recognises anything it already created.
-            $record->delete();
-
-            throw new ApiException(409, 'idempotency_in_progress', 'The previous request with this Idempotency-Key did not finish. Retry it.', headers: ['Retry-After' => 1]);
+            return null;
         }
 
         $body = json_decode((string) $record->response_body, true);

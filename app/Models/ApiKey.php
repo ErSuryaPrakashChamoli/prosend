@@ -30,6 +30,11 @@ class ApiKey extends Model
     public const KEY_PATTERN = '/^psk_(live|test)_([A-Za-z0-9]{12})_([A-Za-z0-9]{40})$/';
 
     /**
+     * Anything that looks like a ProSend key, even a partial or mistyped one.
+     */
+    private const KEY_IN_TEXT_PATTERN = '/psk_(live|test)_(?!\[redacted\])\w*/';
+
+    /**
      * @var array<string, mixed>
      */
     protected $attributes = [
@@ -93,6 +98,22 @@ class ApiKey extends Model
     /**
      * Find the key a plaintext value belongs to, comparing the secret in constant time.
      */
+    /**
+     * Whether the text contains something that looks like an API key, such as a URL a client put a key in.
+     */
+    public static function appearsIn(string $text): bool
+    {
+        return preg_match(self::KEY_IN_TEXT_PATTERN, $text) === 1;
+    }
+
+    /**
+     * The text with anything that looks like an API key masked, for request logs and the application log.
+     */
+    public static function redact(string $text): string
+    {
+        return preg_replace(self::KEY_IN_TEXT_PATTERN, 'psk_$1_[redacted]', $text) ?? $text;
+    }
+
     public static function findByPlaintext(string $plaintext): ?self
     {
         if (preg_match(self::KEY_PATTERN, $plaintext, $parts) !== 1) {
@@ -173,9 +194,15 @@ class ApiKey extends Model
         return $this->mode === ApiKeyMode::Test;
     }
 
+    /**
+     * Reading every email includes reading the key's own, so emails:read_all also grants emails:read.
+     */
     public function hasScope(ApiScope $scope): bool
     {
-        return in_array($scope->value, $this->scopes ?? [], true);
+        $scopes = $this->scopes ?? [];
+
+        return in_array($scope->value, $scopes, true)
+            || ($scope === ApiScope::EmailsRead && in_array(ApiScope::EmailsReadAll->value, $scopes, true));
     }
 
     public function allowsSender(SenderIdentity $senderIdentity): bool
@@ -193,11 +220,12 @@ class ApiKey extends Model
     }
 
     /**
-     * Record a use, writing at most once a minute so busy keys do not update the row on every request.
+     * Record a use, writing at most once a minute so busy keys do not update the row on every request,
+     * even when requests come from several addresses.
      */
     public function touchLastUsed(?string $ip): void
     {
-        if ($this->last_used_at !== null && $this->last_used_at->gt(now()->subMinute()) && $this->last_used_ip === $ip) {
+        if ($this->last_used_at !== null && $this->last_used_at->gt(now()->subMinute())) {
             return;
         }
 

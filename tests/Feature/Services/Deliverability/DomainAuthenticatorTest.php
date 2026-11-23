@@ -162,3 +162,25 @@ it('discards earlier results when the domain is renamed', function () {
         ->provider_authenticated->toBeNull()
         ->isReady()->toBeFalse();
 });
+
+it('checks Mailtrap\'s pair of DKIM selectors for a domain on Mailtrap Email Sending', function () {
+    FakeDnsResolver::install(
+        txt: ['_dmarc.acme.test' => ['v=DMARC1; p=none']],
+        cname: [
+            'rwmt1._domainkey.acme.test' => ['rwmt1.dkim.mailtrap.io'],
+            'rwmt2._domainkey.acme.test' => ['rwmt2.dkim.mailtrap.io'],
+        ],
+    );
+    $domain = SendingDomain::factory()->for(SmtpProvider::factory()->mailtrap())->create(['domain' => 'acme.test']);
+
+    app(DomainAuthenticator::class)->checkDns($domain);
+
+    expect($domain->refresh())
+        ->dkim_status->toBe(DnsCheckStatus::Found)
+        ->dkim_records->toBe(['rwmt1' => 'CNAME rwmt1.dkim.mailtrap.io', 'rwmt2' => 'CNAME rwmt2.dkim.mailtrap.io']);
+
+    FakeDnsResolver::install(cname: ['rwmt1._domainkey.acme.test' => ['rwmt1.dkim.mailtrap.io']]);
+    app(DomainAuthenticator::class)->checkDns($domain);
+
+    expect($domain->refresh()->dkim_status)->toBe(DnsCheckStatus::Incomplete);
+});

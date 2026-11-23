@@ -33,7 +33,7 @@ class EmailMetrics
         return $this->filter(
             EmailMessage::query()
                 ->whereBetween($dateColumn, [$start, $end])
-                ->where('email_messages.status', '!=', MessageStatus::Simulated),
+                ->whereNotIn('email_messages.status', MessageStatus::excludedFromReports()),
             $filters,
         );
     }

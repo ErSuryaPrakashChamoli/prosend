@@ -7,6 +7,8 @@ use App\Actions\Campaigns\LaunchCampaign;
 use App\Actions\Campaigns\PauseCampaign;
 use App\Actions\Campaigns\ResumeCampaign;
 use App\Actions\Campaigns\RetryFailedCampaignMessages;
+use App\Actions\Campaigns\ReturnCampaignToDraft;
+use App\Actions\Campaigns\SubmitCampaignForApproval;
 use App\Actions\Messages\SendTestEmail;
 use App\Enums\CampaignStatus;
 use App\Enums\MessageStatus;
@@ -20,6 +22,8 @@ use Closure;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\EditAction;
+use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
@@ -40,13 +44,15 @@ class ViewCampaign extends ViewRecord
 
     protected function getHeaderWidgets(): array
     {
-        return $this->record->status === CampaignStatus::Draft ? [] : [CampaignProgress::class];
+        return in_array($this->record->status, [CampaignStatus::Draft, CampaignStatus::PendingApproval], true) ? [] : [CampaignProgress::class];
     }
 
     protected function getHeaderActions(): array
     {
         return [
+            $this->submitAction(),
             $this->launchAction(),
+            $this->returnToDraftAction(),
             $this->campaignAction('pause', 'Pause', Heroicon::OutlinedPause, 'warning', PauseCampaign::class, 'Campaign paused', fn (Campaign $campaign): bool => $campaign->status->canBePaused()),
             $this->campaignAction('resume', 'Resume', Heroicon::OutlinedPlay, 'primary', ResumeCampaign::class, 'Campaign resumed', fn (Campaign $campaign): bool => $campaign->status === CampaignStatus::Paused),
             EditAction::make(),
@@ -62,23 +68,90 @@ class ViewCampaign extends ViewRecord
         ];
     }
 
+    private function submitAction(): Action
+    {
+        return Action::make('submit')
+            ->label('Submit for approval')
+            ->icon(Heroicon::OutlinedPaperAirplane)
+            ->visible(fn (): bool => auth()->user()->can('submit', $this->record))
+            ->modalHeading('Submit for approval')
+            ->modalDescription('An administrator reviews and approves the campaign before anything is sent. It cannot be edited while it waits; return it to draft to make changes.')
+            ->modalWidth(Width::TwoExtraLarge)
+            ->modalIcon(Heroicon::OutlinedPaperAirplane)
+            ->schema(fn (): array => $this->readinessSchema($this->readiness(), confirmLargeAudience: false))
+            ->modalSubmitActionLabel('Submit for approval')
+            ->modalSubmitAction(fn (Action $action) => $action->disabled(! $this->readiness()->canLaunch()))
+            ->action(function (SubmitCampaignForApproval $submit): void {
+                try {
+                    $submit->handle($this->record, auth()->user());
+                } catch (ValidationException $exception) {
+                    Notification::make()->danger()->title('Campaign not submitted')->body(implode(' ', $exception->validator->errors()->all()))->send();
+
+                    return;
+                }
+
+                Notification::make()->success()->title('Submitted for approval')->body('Administrators have been notified.')->send();
+
+                $this->redirect(CampaignResource::getUrl('view', ['record' => $this->record]));
+            });
+    }
+
+    private function returnToDraftAction(): Action
+    {
+        return Action::make('returnToDraft')
+            ->label(fn (): string => $this->record->submitted_by === auth()->id() ? 'Withdraw' : 'Return to draft')
+            ->icon(Heroicon::OutlinedArrowUturnLeft)
+            ->color('gray')
+            ->visible(fn (): bool => auth()->user()->can('returnToDraft', $this->record))
+            ->modalDescription('The campaign becomes an editable draft again and must be submitted again before it can send.')
+            ->schema([
+                Textarea::make('note')
+                    ->label('Reason')
+                    ->helperText('Shown on the campaign and sent to whoever submitted it.')
+                    ->rows(3)
+                    ->maxLength(2000),
+            ])
+            ->action(function (array $data, ReturnCampaignToDraft $returnToDraft): void {
+                try {
+                    $returnToDraft->handle($this->record, auth()->user(), $data['note'] ?? null);
+                } catch (ValidationException $exception) {
+                    Notification::make()->danger()->title('Not possible')->body(implode(' ', $exception->validator->errors()->all()))->send();
+
+                    return;
+                }
+
+                Notification::make()->success()->title('Campaign returned to draft')->send();
+
+                $this->redirect(CampaignResource::getUrl('view', ['record' => $this->record]));
+            });
+    }
+
     private function launchAction(): Action
     {
         return Action::make('launch')
-            ->label(fn (): string => $this->record->scheduled_at?->isFuture() ? 'Schedule' : 'Launch')
-            ->icon(Heroicon::OutlinedPaperAirplane)
-            ->visible(fn (): bool => $this->record->status === CampaignStatus::Draft && auth()->user()->can('operate', $this->record))
+            ->label(fn (): string => $this->record->scheduled_at?->isFuture() ? 'Approve and schedule' : 'Approve and send')
+            ->icon(Heroicon::OutlinedCheckBadge)
+            ->visible(fn (): bool => auth()->user()->can('approve', $this->record))
             ->modalHeading('Review before sending')
             ->modalWidth(Width::TwoExtraLarge)
             ->modalIcon(Heroicon::OutlinedPaperAirplane)
-            ->schema(fn (): array => $this->readinessSchema($this->readiness()))
+            // What the approver is shown is pinned, so the approval cannot apply to a later version.
+            ->fillForm(fn (): array => [
+                'reviewed_fingerprint' => $this->record->submissionFingerprint(),
+                'reviewed_eligible_count' => $this->readiness()->eligibleCount,
+            ])
+            ->schema(fn (): array => [
+                ...$this->readinessSchema($this->readiness()),
+                Hidden::make('reviewed_fingerprint'),
+                Hidden::make('reviewed_eligible_count'),
+            ])
             ->modalSubmitActionLabel(fn (): string => $this->record->scheduled_at?->isFuture()
                 ? 'Schedule for '.$this->record->scheduled_at->toDayDateTimeString()
                 : 'Send to '.Number::format($this->readiness()->eligibleCount).' recipients')
             ->modalSubmitAction(fn (Action $action) => $action->disabled(! $this->readiness()->canLaunch()))
-            ->action(function (LaunchCampaign $launch): void {
+            ->action(function (array $data, LaunchCampaign $launch): void {
                 try {
-                    $report = $launch->handle($this->record);
+                    $report = $launch->handle($this->record, auth()->user(), (string) ($data['reviewed_fingerprint'] ?? ''), (int) ($data['reviewed_eligible_count'] ?? 0));
                 } catch (ValidationException $exception) {
                     Notification::make()->danger()->title('Campaign not launched')->body(implode(' ', $exception->validator->errors()->all()))->send();
 
@@ -99,9 +172,13 @@ class ViewCampaign extends ViewRecord
     /**
      * @return array<int, mixed>
      */
-    private function readinessSchema(ReadinessReport $report): array
+    private function readinessSchema(ReadinessReport $report, bool $confirmLargeAudience = true): array
     {
         $schema = [];
+
+        if (filled($this->record->review_note)) {
+            $schema[] = Callout::make($this->record->review_note)->info();
+        }
 
         foreach ($report->blockingIssues as $issue) {
             $schema[] = Callout::make($issue)->danger()->icon(Heroicon::OutlinedExclamationTriangle);
@@ -139,7 +216,7 @@ class ViewCampaign extends ViewRecord
                 ->state($report->remainingQuota === null ? 'No limit configured' : Number::format($report->remainingQuota)),
         ]);
 
-        if ($report->canLaunch() && $report->eligibleCount >= config('prosend.campaigns.large_audience_threshold')) {
+        if ($confirmLargeAudience && $report->canLaunch() && $report->eligibleCount >= config('prosend.campaigns.large_audience_threshold')) {
             $schema[] = TextInput::make('confirmation')
                 ->label('Type '.$report->eligibleCount.' to confirm sending to this many people')
                 ->required()
@@ -232,7 +309,7 @@ class ViewCampaign extends ViewRecord
 
                 $notification = Notification::make()->title('Test email: '.$message->status->getLabel())->body($message->error_message ?? $message->status->getDescription());
 
-                ($message->status === MessageStatus::Accepted ? $notification->success() : $notification->danger())->send();
+                (in_array($message->status, [MessageStatus::Accepted, MessageStatus::Captured], true) ? $notification->success() : $notification->danger())->send();
             });
     }
 
@@ -243,7 +320,7 @@ class ViewCampaign extends ViewRecord
             ->icon(Heroicon::OutlinedDocumentDuplicate)
             ->visible(fn (): bool => CampaignResource::canCreate())
             ->action(function (): void {
-                $copy = $this->record->replicate(['status', 'scheduled_at', 'started_at', 'completed_at', 'batch_id']);
+                $copy = $this->record->replicate(['status', 'scheduled_at', 'started_at', 'prepared_at', 'completed_at', 'batch_id', 'submitted_by', 'submitted_at', 'approved_by', 'approved_at', 'approved_recipient_count', 'review_note']);
                 $copy->name = 'Copy of '.$this->record->name;
                 $copy->status = CampaignStatus::Draft;
                 $copy->created_by = auth()->id();

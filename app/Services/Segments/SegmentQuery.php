@@ -3,6 +3,7 @@
 namespace App\Services\Segments;
 
 use App\Enums\ConsentStatus;
+use App\Enums\ContactStage;
 use App\Enums\EmailEventType;
 use App\Enums\MessageStatus;
 use App\Enums\SegmentMatch;
@@ -29,6 +30,10 @@ class SegmentQuery
         'tag' => 'Tag',
         'email_domain' => 'Email domain',
         'company' => 'Company',
+        'job_title' => 'Job title',
+        'industry' => 'Industry',
+        'source' => 'Source',
+        'stage' => 'Stage',
         'custom_attribute' => 'Custom attribute',
         'added' => 'Date added',
         'unsubscribed' => 'Unsubscribed',
@@ -74,11 +79,11 @@ class SegmentQuery
                 ? $query->where(fn (Builder $tags) => $tags->whereNull('tags')->orWhereJsonDoesntContain('tags', (string) ($data['tag'] ?? '')))
                 : $query->whereJsonContains('tags', (string) ($data['tag'] ?? '')),
             'email_domain' => $this->applyEmailDomain($query, (string) ($data['domain'] ?? '')),
-            'company' => match ($data['operator'] ?? 'contains') {
-                'is_empty' => $query->where(fn (Builder $company) => $company->whereNull('company')->orWhere('company', '')),
-                'is_not_empty' => $query->whereNotNull('company')->where('company', '!=', ''),
-                default => $query->where('company', 'like', '%'.addcslashes((string) ($data['value'] ?? ''), '%_\\').'%'),
-            },
+            'company', 'job_title', 'industry', 'source' => $this->applyText($query, $type, $data),
+            'stage' => $query->whereIn('stage', array_filter(array_map(
+                fn (mixed $stage): ?ContactStage => ContactStage::tryFrom((string) $stage),
+                (array) ($data['stages'] ?? []),
+            ))),
             'custom_attribute' => $this->applyCustomAttribute($query, $data),
             'added' => $this->applyDate($query, $data),
             'unsubscribed' => ($data['value'] ?? 'no') === 'yes' ? $query->whereNotNull('unsubscribed_at') : $query->whereNull('unsubscribed_at'),
@@ -88,6 +93,21 @@ class SegmentQuery
             'received' => $query->{$negate ? 'whereDoesntHave' : 'whereHas'}('emailMessages', fn (Builder $messages) => $messages
                 ->whereIn('status', MessageStatus::acceptedByProvider())
                 ->where('accepted_at', '>=', now()->subDays(max(1, (int) ($data['days'] ?? 7))))),
+        };
+    }
+
+    /**
+     * The column is one of the fixed rule types, never user input.
+     *
+     * @param  Builder<Contact>  $query
+     * @param  array<string, mixed>  $data
+     */
+    private function applyText(Builder $query, string $column, array $data): void
+    {
+        match ($data['operator'] ?? 'contains') {
+            'is_empty' => $query->where(fn (Builder $text) => $text->whereNull($column)->orWhere($column, '')),
+            'is_not_empty' => $query->whereNotNull($column)->where($column, '!=', ''),
+            default => $query->whereContains($column, (string) ($data['value'] ?? '')),
         };
     }
 

@@ -16,6 +16,9 @@ class EmailMessageAttempt extends Model
 {
     public const OUTCOME_ACCEPTED = 'accepted';
 
+    /** A sandbox provider accepted the message for inspection; it was not delivered. */
+    public const OUTCOME_CAPTURED = 'captured';
+
     public const OUTCOME_DEFERRED = 'deferred';
 
     public const OUTCOME_FAILED = 'failed';

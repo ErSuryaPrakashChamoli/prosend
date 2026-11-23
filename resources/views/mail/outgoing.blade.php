@@ -21,6 +21,9 @@
                     <p style="max-width: 600px; margin: 16px auto 0; font-family: Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.5; color: #71717a;">
                         You are receiving this email from {{ $senderName }} because you subscribed.
                         <a href="{{ $rendered->unsubscribeUrl }}" style="color: #71717a;">Unsubscribe</a>
+                        @if (filled($postalAddress ?? null))
+                            <br>{{ $postalAddress }}
+                        @endif
                     </p>
                 @endif
             </td>

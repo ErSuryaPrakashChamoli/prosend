@@ -13,7 +13,7 @@ class CreateCampaign extends CreateRecord
 
     protected function afterCreate(): void
     {
-        $this->record->forceFill(['created_by' => auth()->id()])->save();
+        $this->record->forceFill(['created_by' => auth()->id(), 'updated_by' => auth()->id()])->save();
     }
 
     protected function getCreatedNotificationTitle(): ?string

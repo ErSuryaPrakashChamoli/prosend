@@ -55,12 +55,33 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Marketing Footer
+    |--------------------------------------------------------------------------
+    |
+    | Marketing email must say who sent it and where the business can be
+    | reached; CAN-SPAM requires a valid postal address. It is shown in
+    | the footer of every marketing email, under the unsubscribe link.
+    |
+    */
+
+    'marketing' => [
+        'postal_address' => env('PROSEND_POSTAL_ADDRESS'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Campaigns
     |--------------------------------------------------------------------------
     |
     | Campaign emails are spread out at the campaign's per-minute rate. Above
     | the confirmation threshold, launching requires typing the recipient
     | count, which protects against sending to a large list by mistake.
+    |
+    | Every campaign is submitted, then approved by an administrator before
+    | it sends. With a second approver required, nobody can approve a
+    | campaign they created or submitted. If the eligible audience has
+    | grown by more than the margin when sending starts (for example
+    | after an import into a targeted list), it needs approving again.
     |
     */
 
@@ -69,6 +90,10 @@ return [
         'max_send_rate_per_minute' => (int) env('PROSEND_MAX_SEND_RATE', 600),
         'large_audience_threshold' => (int) env('PROSEND_LARGE_AUDIENCE_THRESHOLD', 500),
         'chunk_size' => 500,
+        'approval' => [
+            'require_second_approver' => (bool) env('PROSEND_CAMPAIGN_REQUIRE_SECOND_APPROVER', false),
+            'audience_growth_margin_percent' => (int) env('PROSEND_CAMPAIGN_APPROVAL_GROWTH_PERCENT', 10),
+        ],
     ],
 
     /*
@@ -79,13 +104,56 @@ return [
     | Temporary failures are retried with these delays (in seconds). After the
     | last one the message is marked as failed and can be retried manually.
     |
+    | Recipient domain limits cap emails per minute to one receiving domain,
+    | across all providers, for example ['gmail.com' => 60]. Email over a
+    | limit waits its turn. Brevo throttles per domain itself; these
+    | matter most when sending through your own mail server.
+    |
     */
 
     'sending' => [
         'queue' => env('PROSEND_QUEUE', 'default'),
         'retry_delays' => [60, 300, 900, 3600],
         'connection_timeout' => 30,
+        'recipient_domain_limits' => [],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Providers
+    |--------------------------------------------------------------------------
+    |
+    | Sandbox providers (Mailtrap Email Sandbox) capture email instead of
+    | delivering it. They are refused in production unless allowed here,
+    | so real email can never be routed into a sandbox by mistake.
+    |
+    | SMTP hosts are resolved and checked every time ProSend connects, and
+    | the connection is pinned to the checked address. Link-local and cloud
+    | metadata addresses are always refused. Private and loopback addresses
+    | (a relay on your own network, or Mailpit) must be allowed explicitly.
+    |
+    */
+
+    'providers' => [
+        'allow_sandbox' => (bool) env('PROSEND_ALLOW_SANDBOX_PROVIDERS', env('APP_ENV') !== 'production'),
+        'allow_private_hosts' => (bool) env('PROSEND_SMTP_ALLOW_PRIVATE_HOSTS', env('APP_ENV') === 'local'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Trusted proxies
+    |--------------------------------------------------------------------------
+    |
+    | The load balancers or reverse proxies in front of ProSend, as IP addresses
+    | or CIDR ranges separated by commas, or * to trust any (only when the app
+    | cannot be reached except through the proxy). Without this, ProSend sees
+    | the proxy's address for every request, so API IP allowlists and the
+    | failed-key throttle apply to the proxy instead of the real client.
+    | Leave empty when clients connect directly.
+    |
+    */
+
+    'trusted_proxies' => env('PROSEND_TRUSTED_PROXIES'),
 
     /*
     |--------------------------------------------------------------------------

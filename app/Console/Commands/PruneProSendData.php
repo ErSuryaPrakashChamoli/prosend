@@ -11,6 +11,7 @@ use App\Models\IdempotencyKey;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
@@ -28,7 +29,7 @@ class PruneProSendData extends Command
         $this->report('Idempotency keys', $this->deleteInBatches(IdempotencyKey::query()->where('created_at', '<', now()->subHours(IdempotencyKey::RETENTION_HOURS))));
         $this->report('API usage days', $this->deleteInBatches(ApiKeyDailyUsage::query()->where('date', '<', now()->subMonths($retention['api_usage_months'])->toDateString())));
         $this->report('Email bodies and attachments', $this->clearBodies(now()->subDays($retention['message_bodies_days'])));
-        $this->report('Email records and their events', $this->deleteInBatches(EmailMessage::query()->where('created_at', '<', now()->subMonths($retention['messages_months']))));
+        $this->report('Email records and their events', $this->deleteInBatches(EmailMessage::query()->where('created_at', '<', now()->subMonths($retention['messages_months']))->whereNotIn('status', MessageStatus::inFlight())));
         $this->report('Audit log entries', $this->deleteInBatches(AuditLog::query()->where('created_at', '<', now()->subMonths($retention['audit_logs_months']))));
 
         return self::SUCCESS;
@@ -61,21 +62,41 @@ class PruneProSendData extends Command
             ->whereNotIn('status', MessageStatus::inFlight())
             ->where(fn (Builder $messages) => $messages->whereNotNull('html_body')->orWhereNotNull('text_body')->orWhereNotNull('attachments')->orWhereNotNull('variables'))
             ->chunkById(500, function (Collection $messages) use ($disk, &$cleared): void {
-                $paths = $messages->flatMap(fn (EmailMessage $message): array => array_column($message->attachments ?? [], 'path'))->all();
-
-                if ($paths !== []) {
-                    $disk->delete($paths);
-                }
-
                 $cleared += EmailMessage::query()->whereKey($messages->modelKeys())->update([
                     'html_body' => null,
                     'text_body' => null,
                     'attachments' => null,
                     'variables' => null,
                 ]);
+
+                $this->deleteUnreferencedAttachments($disk, $messages->flatMap(fn (EmailMessage $message): array => array_column($message->attachments ?? [], 'path'))->unique()->values()->all());
             });
 
         return $cleared;
+    }
+
+    /**
+     * Compose and API sends store one copy of an attachment for all their recipients, and some of those
+     * messages may still be waiting to send. A file is only deleted once no message refers to it.
+     *
+     * @param  list<string>  $paths
+     */
+    private function deleteUnreferencedAttachments(Filesystem $disk, array $paths): void
+    {
+        $unreferenced = array_values(array_filter($paths, function (string $path): bool {
+            // Stored names start with a unique ULID or UUID, which JSON writes the same way on every database.
+            preg_match('/^[A-Za-z0-9._-]+/', basename($path), $match);
+
+            if (strlen($match[0] ?? '') < 6) {
+                return false;
+            }
+
+            return ! EmailMessage::query()->where('attachments', 'like', '%'.$match[0].'%')->exists();
+        }));
+
+        if ($unreferenced !== []) {
+            $disk->delete($unreferenced);
+        }
     }
 
     private function report(string $what, int $count): void

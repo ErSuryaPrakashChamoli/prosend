@@ -44,13 +44,13 @@ class SendEmailRequest extends FormRequest
             'variables' => ['array', 'max:50'],
             'variables.*' => ['nullable', static::scalarUpTo(2000)],
             'tags' => ['array', 'max:10'],
-            'tags.*' => ['string', 'regex:/^[a-z0-9_-]{1,50}$/'],
+            'tags.*' => ['string', 'regex:/^[a-z0-9_-]{1,50}$/D'],
             'metadata' => ['array', 'max:20'],
             'metadata.*' => ['nullable', static::scalarUpTo(500)],
             'scheduled_at' => ['nullable', 'date', 'after:now', 'before:+30 days'],
             'attachments' => ['array', 'max:'.config('prosend.attachments.max_files')],
             'attachments.*' => ['array:filename,content,content_type'],
-            'attachments.*.filename' => ['required', 'string', 'max:255', 'regex:/^[^\/\\\\]+$/'],
+            'attachments.*.filename' => ['required', 'string', 'max:255', 'regex:/^[^\x00-\x1F\x7F\/\\\\]+$/D'],
             'attachments.*.content' => ['required', 'string'],
             'attachments.*.content_type' => ['required', 'string', Rule::in(config('prosend.attachments.accepted_mime_types'))],
         ];
@@ -84,7 +84,7 @@ class SendEmailRequest extends FormRequest
                 }
 
                 foreach (array_keys((array) $this->input('metadata', [])) as $name) {
-                    if (preg_match('/^[A-Za-z0-9_.-]{1,40}$/', (string) $name) !== 1) {
+                    if (preg_match('/^[A-Za-z0-9_.-]{1,40}$/D', (string) $name) !== 1) {
                         $validator->errors()->add('metadata', "Metadata keys may only use letters, numbers, dots, dashes and underscores: {$name}.");
                     }
                 }

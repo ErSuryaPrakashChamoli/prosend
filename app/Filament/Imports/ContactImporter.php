@@ -23,6 +23,11 @@ class ContactImporter extends Importer
 {
     protected static ?string $model = Contact::class;
 
+    /**
+     * The failed-rows CSV repeats uploaded cells, so cells that a spreadsheet would run as formulas are neutralised.
+     */
+    protected static bool $shouldPreventFormulaInjection = true;
+
     public static function getColumns(): array
     {
         return [
@@ -31,10 +36,16 @@ class ContactImporter extends Importer
                 ->requiredMapping()
                 ->guess(['email', 'email address', 'e-mail', 'mail'])
                 ->example('jane@example.com')
+                ->castStateUsing(fn (?string $state): ?string => static::withoutFormulaEscape($state))
                 ->rules(['required', 'email:rfc', 'max:255']),
             static::optionalTextColumn('first_name', ['first name', 'firstname', 'given name'], 'Jane'),
             static::optionalTextColumn('last_name', ['last name', 'lastname', 'surname', 'family name'], 'Doe'),
             static::optionalTextColumn('company', ['company name', 'organization', 'organisation'], 'Example Ltd'),
+            static::optionalTextColumn('job_title', ['job title', 'title', 'position', 'role'], 'Head of Operations'),
+            static::optionalTextColumn('industry', ['sector'], 'Logistics'),
+            static::optionalTextColumn('website', ['website url', 'url', 'web', 'company website'], 'https://example.com')
+                ->castStateUsing(fn (?string $state): ?string => Contact::normalizeWebsite(static::withoutFormulaEscape($state)))
+                ->rules(['nullable', 'string', 'max:255', 'url:http,https']),
             static::optionalTextColumn('phone', ['phone number', 'mobile', 'telephone'], '+1 555 0100', maxLength: 50),
             ImportColumn::make('tags')
                 ->array(',')
@@ -74,7 +85,7 @@ class ContactImporter extends Importer
                 ->label('Where did these contacts give consent?')
                 ->placeholder('For example: website newsletter form, March 2026')
                 ->maxLength(255)
-                ->required(fn (Get $get): bool => $get('default_consent_status') === ConsentStatus::Granted->value),
+                ->required(fn (Get $get): bool => static::consentOption($get('default_consent_status')) === ConsentStatus::Granted),
             Checkbox::make('confirmed_lawful_basis')
                 ->label('I confirm these contacts asked to receive email from us. This is not a purchased, rented, or scraped list.')
                 ->accepted(),
@@ -138,7 +149,7 @@ class ContactImporter extends Importer
             return;
         }
 
-        $status = $state ?? ConsentStatus::tryFrom((string) ($options['default_consent_status'] ?? '')) ?? ConsentStatus::Unknown;
+        $status = $state ?? static::consentOption($options['default_consent_status'] ?? null) ?? ConsentStatus::Unknown;
 
         if ($status === $record->consent_status && $record->exists) {
             return;
@@ -147,6 +158,23 @@ class ContactImporter extends Importer
         $record->consent_status = $status;
         $record->consent_source = $status === ConsentStatus::Granted ? ($options['consent_source'] ?? 'CSV import') : $record->consent_source;
         $record->consented_at = $status === ConsentStatus::Granted ? now() : $record->consented_at;
+    }
+
+    /**
+     * The form gives the chosen consent as an enum, while stored or test options may hold its string value.
+     */
+    protected static function consentOption(mixed $option): ?ConsentStatus
+    {
+        return $option instanceof ConsentStatus ? $option : ConsentStatus::tryFrom((string) $option);
+    }
+
+    /**
+     * ProSend's exports put an apostrophe before cells that start like a formula, such as "+44 20 7946 0000".
+     * Removing it again lets an exported file be imported without changing the data.
+     */
+    public static function withoutFormulaEscape(?string $state): ?string
+    {
+        return $state === null ? null : preg_replace('/^\'(?=[=+\-@\t\r])/', '', $state);
     }
 
     /**
@@ -159,6 +187,7 @@ class ContactImporter extends Importer
         return ImportColumn::make($name)
             ->guess($guesses)
             ->example($example)
+            ->castStateUsing(fn (?string $state): ?string => static::withoutFormulaEscape($state))
             ->rules(['nullable', 'string', "max:{$maxLength}"])
             ->fillRecordUsing(function (Contact $record, ?string $state) use ($name): void {
                 if (filled($state)) {

@@ -44,7 +44,7 @@ class TrackApiRequest
             'api_key_id' => $apiKey?->getKey(),
             'request_id' => $request->attributes->get('request_id', 'req_unknown'),
             'method' => $request->method(),
-            'path' => Str::limit($request->path(), 250, ''),
+            'path' => Str::limit(ApiKey::redact($request->path()), 250, ''),
             'status' => $status,
             'duration_ms' => (int) ((hrtime(true) - $request->attributes->get('request_started_at', hrtime(true))) / 1_000_000),
             'ip' => $request->ip(),

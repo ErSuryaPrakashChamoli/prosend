@@ -20,6 +20,7 @@ class MailProviderManager
         return $this->drivers[$provider->type->value] ??= $this->container->make(match ($provider->type) {
             ProviderType::Brevo => BrevoDriver::class,
             ProviderType::Smtp => SmtpDriver::class,
+            ProviderType::Mailtrap, ProviderType::MailtrapSandbox => MailtrapDriver::class,
         });
     }
 

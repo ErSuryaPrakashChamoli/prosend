@@ -1,10 +1,13 @@
 <?php
 
+use App\Actions\Api\SendEmailsViaApi;
+use App\Http\Middleware\HandleIdempotency;
 use App\Jobs\SendEmailMessage;
 use App\Models\EmailMessage;
 use App\Models\IdempotencyKey;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Queue;
+use Mockery\MockInterface;
 
 function idempotentPayload(array $overrides = []): array
 {
@@ -62,18 +65,20 @@ it('returns 409 while the first request with the key is still running', function
     expect(EmailMessage::query()->count())->toBe(0);
 });
 
-it('recognises messages an interrupted first attempt already created', function () {
+it('recognises messages an interrupted first attempt already created and queues any that never got a send job', function () {
     Queue::fake([SendEmailMessage::class]);
     [$apiKey, $plaintext] = issueApiKey();
     $existing = EmailMessage::factory()->create(['api_key_id' => $apiKey->id, 'idempotency_key' => 'k1']);
 
     $this->withToken($plaintext)->withHeader('Idempotency-Key', 'k1')->postJson('/api/v1/emails', idempotentPayload())
         ->assertAccepted()
+        ->assertHeader('Idempotent-Replayed', 'true')
         ->assertJsonPath('data.0.id', $existing->uuid)
         ->assertJsonPath('meta.idempotent_replay', true);
 
     expect(EmailMessage::query()->count())->toBe(1);
-    Queue::assertNothingPushed();
+    Queue::assertPushed(SendEmailMessage::class, fn (SendEmailMessage $job): bool => $job->message->is($existing));
+    Queue::assertPushed(SendEmailMessage::class, 1);
 });
 
 it('allows the key again after 24 hours', function () {
@@ -97,4 +102,64 @@ it('keeps idempotency keys separate per API key', function () {
     $this->withToken($second)->withHeader('Idempotency-Key', 'shared')->postJson('/api/v1/emails', idempotentPayload())->assertAccepted()->assertHeaderMissing('Idempotent-Replayed');
 
     expect(EmailMessage::query()->count())->toBe(2);
+});
+
+function idempotencyHash(array $payload): string
+{
+    return hash('sha256', 'POST api/v1/emails'."\n".json_encode(Arr::sortRecursive($payload)));
+}
+
+it('lets a retry take over from a first attempt that stopped, keeping the claim', function () {
+    Queue::fake([SendEmailMessage::class]);
+    [$apiKey, $plaintext] = issueApiKey();
+    IdempotencyKey::query()->create(['api_key_id' => $apiKey->id, 'key' => 'k1', 'request_hash' => idempotencyHash(idempotentPayload()), 'status' => IdempotencyKey::STATUS_PROCESSING, 'locked_until' => now()->subSecond()]);
+
+    $this->withToken($plaintext)->withHeader('Idempotency-Key', 'k1')->postJson('/api/v1/emails', idempotentPayload())->assertAccepted();
+    $this->withToken($plaintext)->withHeader('Idempotency-Key', 'k1')->postJson('/api/v1/emails', idempotentPayload())
+        ->assertAccepted()
+        ->assertHeader('Idempotent-Replayed', 'true');
+
+    expect(EmailMessage::query()->count())->toBe(1);
+    Queue::assertPushed(SendEmailMessage::class, 1);
+});
+
+it('holds the key while a slow first request may still be running', function () {
+    [$apiKey, $plaintext] = issueApiKey();
+    IdempotencyKey::query()->create(['api_key_id' => $apiKey->id, 'key' => 'k1', 'request_hash' => idempotencyHash(idempotentPayload()), 'status' => IdempotencyKey::STATUS_PROCESSING, 'locked_until' => now()->addSeconds(HandleIdempotency::LOCK_SECONDS - 90)]);
+
+    $this->withToken($plaintext)->withHeader('Idempotency-Key', 'k1')->postJson('/api/v1/emails', idempotentPayload())
+        ->assertConflict()
+        ->assertHeader('Retry-After', (string) (HandleIdempotency::LOCK_SECONDS - 90));
+
+    expect(IdempotencyKey::query()->sole()->status)->toBe(IdempotencyKey::STATUS_PROCESSING);
+});
+
+it('keeps the key after a server error so a different body is still refused', function () {
+    Queue::fake([SendEmailMessage::class]);
+    [, $plaintext] = issueApiKey();
+    $this->partialMock(SendEmailsViaApi::class, fn (MockInterface $mock) => $mock->shouldReceive('handle')->once()->andThrow(new RuntimeException('Database went away')));
+
+    $this->withToken($plaintext)->withHeader('Idempotency-Key', 'k1')->postJson('/api/v1/emails', idempotentPayload())
+        ->assertServerError()
+        ->assertJsonPath('error.code', 'server_error');
+
+    $this->withToken($plaintext)->withHeader('Idempotency-Key', 'k1')->postJson('/api/v1/emails', idempotentPayload(['to' => [['email' => 'someone-else@example.com']]]))
+        ->assertUnprocessable()
+        ->assertJsonPath('error.code', 'idempotency_key_reused');
+    expect(EmailMessage::query()->count())->toBe(0);
+});
+
+it('does not replay a refused request once its cause is fixed', function () {
+    Queue::fake([SendEmailMessage::class]);
+    [$apiKey, $plaintext] = issueApiKey(['daily_send_limit' => 0]);
+
+    $this->withToken($plaintext)->withHeader('Idempotency-Key', 'k1')->postJson('/api/v1/emails', idempotentPayload())
+        ->assertTooManyRequests();
+
+    $apiKey->forceFill(['daily_send_limit' => 10])->save();
+
+    $this->withToken($plaintext)->withHeader('Idempotency-Key', 'k1')->postJson('/api/v1/emails', idempotentPayload())
+        ->assertAccepted()
+        ->assertHeaderMissing('Idempotent-Replayed');
+    expect(EmailMessage::query()->count())->toBe(1);
 });

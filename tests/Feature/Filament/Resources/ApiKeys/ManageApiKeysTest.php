@@ -82,3 +82,28 @@ it('returns 403 to a sender opening the API keys page', function () {
 
     $this->get(ApiKeyResource::getUrl())->assertForbidden();
 });
+
+it('requires the send scope for a key that may send marketing email', function () {
+    $this->actingAs(User::factory()->admin()->create());
+    $sender = SenderIdentity::factory()->create();
+
+    Livewire::test(ManageApiKeys::class)
+        ->callAction('create', data: ['name' => 'Newsletter', 'mode' => 'live', 'scopes' => ['emails:send_marketing'], 'allowed_sender_identity_ids' => [$sender->id], 'rate_limit_per_minute' => 60])
+        ->assertHasActionErrors(['scopes']);
+
+    expect(ApiKey::query()->count())->toBe(0);
+});
+
+it('records which settings an edit changed, without the secret', function () {
+    $this->actingAs(User::factory()->admin()->create());
+    [$apiKey, $plaintext] = issueApiKey();
+
+    Livewire::test(ManageApiKeys::class)
+        ->callTableAction('edit', $apiKey, data: ['daily_send_limit' => 250, 'allowed_ips' => ['203.0.113.0/24']])
+        ->assertHasNoTableActionErrors();
+
+    $properties = AuditLog::query()->where('action', 'api_key.updated')->sole()->properties;
+    expect($properties['changed'])->toEqualCanonicalizing(['daily_send_limit', 'allowed_ips'])
+        ->and($properties)->toMatchArray(['daily_send_limit' => 250, 'allowed_ips' => ['203.0.113.0/24'], 'allowed_senders' => ['billing@acme.test']])
+        ->and(json_encode($properties))->not->toContain(substr($plaintext, -40));
+});
