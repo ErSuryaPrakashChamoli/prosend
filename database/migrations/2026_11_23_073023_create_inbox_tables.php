@@ -88,7 +88,7 @@ return new class extends Migration
             $table->timestamp('received_at')->nullable();
             $table->timestamps();
 
-            $table->unique(['inbound_mailbox_id', 'message_id_header']);
+            $table->unique(['inbound_mailbox_id', 'message_id_header'], 'conversation_messages_mailbox_message_id_unique');
             $table->index(['conversation_id', 'id']);
         });
 
