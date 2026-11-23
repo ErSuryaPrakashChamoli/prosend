@@ -8,6 +8,7 @@ use App\Filament\Resources\SenderIdentities\Pages\ManageSenderIdentities;
 use App\Models\SenderIdentity;
 use App\Models\SmtpProvider;
 use App\Services\AuditLogger;
+use App\Services\Deliverability\DeliverabilityScore;
 use App\Services\Providers\Brevo\BrevoApiException;
 use BackedEnum;
 use Closure;
@@ -68,7 +69,7 @@ class SenderIdentityResource extends Resource
                     ->email()
                     ->required()
                     ->maxLength(255)
-                    ->unique(ignoreRecord: true)
+                    ->scopedUnique(ignoreRecord: true)
                     ->helperText('Changing the address removes its verification.'),
                 TextInput::make('reply_to')
                     ->label('Default Reply-To')
@@ -80,6 +81,12 @@ class SenderIdentityResource extends Resource
 
     public static function table(Table $table): Table
     {
+        // The health badge and its tooltip share one score per row.
+        $scores = [];
+        $health = function (SenderIdentity $record) use (&$scores): array {
+            return $scores[$record->getKey()] ??= app(DeliverabilityScore::class)->for($record);
+        };
+
         return $table
             ->recordTitleAttribute('email')
             ->modifyQueryUsing(fn ($query) => $query->with(['smtpProvider', 'verifier']))
@@ -97,6 +104,16 @@ class SenderIdentityResource extends Resource
                     ->badge()
                     ->color(fn (SenderIdentity $record): string => $record->isVerified() ? 'success' : 'warning')
                     ->description(fn (SenderIdentity $record): ?string => $record->isVerified() ? 'by '.($record->verifier?->name ?? 'unknown').' '.$record->verified_at->diffForHumans() : null),
+                TextColumn::make('health')
+                    ->label('Health')
+                    ->badge()
+                    ->state(fn (SenderIdentity $record): string => ($score = $health($record))['score'].' · '.$score['grade'])
+                    ->color(fn (string $state): string => match (true) {
+                        str_ends_with($state, 'Good') => 'success',
+                        str_ends_with($state, 'Needs attention') => 'warning',
+                        default => 'danger',
+                    })
+                    ->tooltip(fn (SenderIdentity $record): string => implode(' ', $health($record)['reasons']) ?: 'Nothing to improve that ProSend can measure.'),
                 TextColumn::make('reply_to')
                     ->label('Reply-To')
                     ->placeholder('—')
@@ -139,6 +156,7 @@ class SenderIdentityResource extends Resource
                         ProviderType::Mailtrap => 'In Mailtrap: Sending Domains, where the domain must show as verified and compliant.',
                         ProviderType::MailtrapSandbox => 'A sandbox accepts any From address, so this only matters where sender verification is required.',
                         ProviderType::Smtp => 'Check your provider\'s sender or domain settings.',
+                        ProviderType::Gmail, ProviderType::Microsoft365 => 'Connected mailboxes send only as their own address, which signing in proved.',
                     }.' ProSend cannot check this automatically for this provider, and unverified senders are rejected or land in spam.')
                     ->action(function (SenderIdentity $record, AuditLogger $auditLogger): void {
                         $record->markVerified(auth()->user());

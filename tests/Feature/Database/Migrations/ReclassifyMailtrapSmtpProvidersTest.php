@@ -2,6 +2,7 @@
 
 use App\Enums\ProviderType;
 use App\Models\AuditLog;
+use App\Models\Scopes\ClientScope;
 use App\Models\SmtpProvider;
 use Illuminate\Support\Facades\DB;
 
@@ -18,9 +19,11 @@ it('gives providers on Mailtrap hosts the type their host implies, and audits ea
         ->and($bulk->refresh()->type)->toBe(ProviderType::Mailtrap)
         ->and($brevo->refresh()->type)->toBe(ProviderType::Brevo)
         ->and($other->refresh()->type)->toBe(ProviderType::Smtp);
-    expect(AuditLog::query()->where('action', 'provider.reclassified')->where('subject_id', $sandbox->id)->sole()->properties)
+    // This migration ran before clients existed and writes entries without a client; a later migration assigned them.
+    $entries = AuditLog::query()->withoutGlobalScope(ClientScope::class)->where('action', 'provider.reclassified');
+    expect((clone $entries)->where('subject_id', $sandbox->id)->sole()->properties)
         ->toMatchArray(['from' => 'smtp', 'to' => 'mailtrap_sandbox']);
-    expect(AuditLog::query()->where('action', 'provider.reclassified')->count())->toBe(2);
+    expect($entries->count())->toBe(2);
 });
 
 it('turns Mailtrap providers back into generic SMTP on rollback, so earlier code can still read them', function () {

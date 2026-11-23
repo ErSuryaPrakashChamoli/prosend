@@ -4,6 +4,8 @@ namespace App\Filament\Resources\AuditLogs;
 
 use App\Filament\Resources\AuditLogs\Pages\ManageAuditLogs;
 use App\Models\AuditLog;
+use App\Models\Scopes\ClientScope;
+use App\Services\Tenancy\CurrentClient;
 use BackedEnum;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\KeyValueEntry;
@@ -14,6 +16,7 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use UnitEnum;
 
 class AuditLogResource extends Resource
@@ -31,6 +34,24 @@ class AuditLogResource extends Resource
     public static function canCreate(): bool
     {
         return false;
+    }
+
+    /**
+     * Super Admins also see entries about the agency itself (clients, roles, people), which belong to no client.
+     *
+     * @return Builder<AuditLog>
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        $query = parent::getEloquentQuery();
+
+        if (! auth()->user()?->isSuperAdmin()) {
+            return $query;
+        }
+
+        return $query
+            ->withoutGlobalScope(ClientScope::class)
+            ->where(fn (Builder $entries) => $entries->where('client_id', app(CurrentClient::class)->id())->orWhereNull('client_id'));
     }
 
     public static function infolist(Schema $schema): Schema
@@ -78,6 +99,11 @@ class AuditLogResource extends Resource
                 TextColumn::make('action')
                     ->badge()
                     ->searchable(),
+                TextColumn::make('client_id')
+                    ->label('Scope')
+                    ->formatStateUsing(fn (): string => 'This client')
+                    ->placeholder('Agency')
+                    ->visible(fn (): bool => auth()->user()?->isSuperAdmin() ?? false),
                 TextColumn::make('subject_type')
                     ->label('Record')
                     ->formatStateUsing(fn (AuditLog $record): string => class_basename($record->subject_type ?? '').' #'.$record->subject_id)
@@ -88,9 +114,9 @@ class AuditLogResource extends Resource
             ])
             ->filters([
                 SelectFilter::make('action')
-                    ->options(fn (): array => AuditLog::query()->distinct()->orderBy('action')->pluck('action', 'action')->all()),
+                    ->options(fn (): array => static::getEloquentQuery()->distinct()->orderBy('action')->pluck('action', 'action')->all()),
                 SelectFilter::make('user')
-                    ->relationship('user', 'name'),
+                    ->relationship('user', 'name', fn (Builder $query) => auth()->user()?->isSuperAdmin() ? $query : $query->memberOf()),
             ])
             ->recordActions([
                 ViewAction::make(),

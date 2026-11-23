@@ -124,6 +124,8 @@ it('lets a retry take over from a first attempt that stopped, keeping the claim'
 });
 
 it('holds the key while a slow first request may still be running', function () {
+    // Frozen, so a second ticking over between creating the lock and the request cannot change Retry-After.
+    $this->freezeSecond();
     [$apiKey, $plaintext] = issueApiKey();
     IdempotencyKey::query()->create(['api_key_id' => $apiKey->id, 'key' => 'k1', 'request_hash' => idempotencyHash(idempotentPayload()), 'status' => IdempotencyKey::STATUS_PROCESSING, 'locked_until' => now()->addSeconds(HandleIdempotency::LOCK_SECONDS - 90)]);
 

@@ -4,6 +4,7 @@ namespace App\Actions\Campaigns;
 
 use App\Enums\CampaignStatus;
 use App\Enums\MessageStatus;
+use App\Enums\SequenceStatus;
 use App\Models\Campaign;
 use App\Services\AuditLogger;
 use App\Services\Campaigns\CampaignDispatcher;
@@ -33,7 +34,17 @@ class CancelCampaign
             ->whereIn('status', [MessageStatus::Queued, MessageStatus::Deferred])
             ->update(['status' => MessageStatus::Cancelled, 'updated_at' => now()]);
 
-        $this->auditLogger->record('campaign.cancelled', $campaign, ['unsent_messages' => $cancelled]);
+        $stoppedProspects = $campaign->prospects()
+            ->active()
+            ->update([
+                'status' => SequenceStatus::Stopped,
+                'next_step_due_at' => null,
+                'finished_at' => now(),
+                'finish_reason' => 'The campaign was stopped.',
+                'updated_at' => now(),
+            ]);
+
+        $this->auditLogger->record('campaign.cancelled', $campaign, ['unsent_messages' => $cancelled, 'stopped_sequences' => $stoppedProspects]);
 
         return $cancelled;
     }

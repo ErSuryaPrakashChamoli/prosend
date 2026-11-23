@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToClient;
 use Database\Factories\ContactListFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -12,7 +13,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 class ContactList extends Model
 {
     /** @use HasFactory<ContactListFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     /**
      * @return BelongsToMany<Contact, $this>

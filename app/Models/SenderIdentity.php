@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\CampaignStatus;
 use App\Enums\MessageStatus;
 use App\Enums\ProviderType;
+use App\Models\Concerns\BelongsToClient;
 use App\Observers\SenderIdentityObserver;
 use Database\Factories\SenderIdentityFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -24,7 +25,7 @@ use LogicException;
 class SenderIdentity extends Model
 {
     /** @use HasFactory<SenderIdentityFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     /**
      * Verification belongs to an address at a provider, so changing either clears it. Moving between a
@@ -56,6 +57,14 @@ class SenderIdentity extends Model
         return [
             'verified_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function clientConsistentRelations(): array
+    {
+        return ['smtpProvider'];
     }
 
     /**

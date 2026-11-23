@@ -5,7 +5,9 @@ namespace App\Filament\Resources\Contacts\Schemas;
 use App\Enums\ConsentStatus;
 use App\Enums\ContactStage;
 use App\Models\Contact;
+use App\Models\ContactList;
 use Closure;
+use DateTimeZone;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\KeyValue;
 use Filament\Forms\Components\Radio;
@@ -17,6 +19,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Str;
 
 class ContactForm
@@ -35,7 +38,7 @@ class ContactForm
                             ->email()
                             ->required()
                             ->maxLength(255)
-                            ->unique(ignoreRecord: true)
+                            ->scopedUnique(ignoreRecord: true)
                             ->columnSpanFull(),
                         TextInput::make('first_name')
                             ->maxLength(255),
@@ -59,6 +62,11 @@ class ContactForm
                         TextInput::make('phone')
                             ->tel()
                             ->maxLength(50),
+                        Select::make('timezone')
+                            ->label('Time zone')
+                            ->options(fn (): array => array_combine(DateTimeZone::listIdentifiers(), DateTimeZone::listIdentifiers()))
+                            ->searchable()
+                            ->helperText('Used by campaigns that send in each prospect\'s own time zone.'),
                         TextInput::make('source')
                             ->placeholder('For example: website signup')
                             ->maxLength(255),
@@ -98,7 +106,7 @@ class ContactForm
                             ->preload()
                             ->searchable()
                             ->createOptionForm([
-                                TextInput::make('name')->required()->maxLength(255)->unique('contact_lists', 'name'),
+                                TextInput::make('name')->required()->maxLength(255)->scopedUnique(ContactList::class, 'name'),
                             ]),
                         TagsInput::make('tags')
                             ->placeholder('Add a tag')
@@ -113,7 +121,7 @@ class ContactForm
                             ->required(),
                         Select::make('owner_id')
                             ->label('Owner')
-                            ->relationship('owner', 'name')
+                            ->relationship('owner', 'name', fn (Builder $query) => $query->memberOf())
                             ->searchable()
                             ->preload()
                             ->placeholder('Unassigned'),

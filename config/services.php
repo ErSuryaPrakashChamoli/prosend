@@ -14,6 +14,22 @@ return [
     |
     */
 
+    /*
+    | OAuth apps for connecting Gmail / Google Workspace and Microsoft 365 mailboxes. Register the redirect URIs
+    | {APP_URL}/admin/oauth/google/callback and {APP_URL}/admin/oauth/microsoft/callback with each provider.
+    */
+
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+    ],
+
+    'microsoft' => [
+        'client_id' => env('MICROSOFT_CLIENT_ID'),
+        'client_secret' => env('MICROSOFT_CLIENT_SECRET'),
+        'tenant' => env('MICROSOFT_TENANT', 'common'),
+    ],
+
     'postmark' => [
         'key' => env('POSTMARK_API_KEY'),
     ],

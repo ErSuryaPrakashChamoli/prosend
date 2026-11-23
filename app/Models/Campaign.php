@@ -6,6 +6,10 @@ use App\Enums\AudienceType;
 use App\Enums\CampaignStatus;
 use App\Enums\EmailPurpose;
 use App\Enums\MessageStatus;
+use App\Enums\OutreachEvent;
+use App\Models\Concerns\BelongsToClient;
+use App\Services\Automation\OutreachEvents;
+use App\Services\Campaigns\SendingWindow;
 use App\Services\Sending\TemplateVariables;
 use Database\Factories\CampaignFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -16,11 +20,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['name', 'purpose', 'sender_identity_id', 'email_template_id', 'subject', 'body', 'text_body', 'required_variables', 'audience_type', 'segment_id', 'send_rate_per_minute', 'scheduled_at'])]
+#[Fillable(['name', 'purpose', 'sender_identity_id', 'email_template_id', 'subject', 'body', 'text_body', 'required_variables', 'audience_type', 'segment_id', 'send_rate_per_minute', 'scheduled_at', 'send_days', 'send_window_start', 'send_window_end', 'timezone', 'use_prospect_timezone', 'track_opens', 'track_clicks'])]
 class Campaign extends Model
 {
     /** @use HasFactory<CampaignFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     /**
      * @var array<string, mixed>
@@ -53,7 +57,20 @@ class Campaign extends Model
             'submitted_at' => 'datetime',
             'approved_at' => 'datetime',
             'approved_recipient_count' => 'integer',
+            'send_days' => 'array',
+            'use_prospect_timezone' => 'boolean',
+            'track_opens' => 'boolean',
+            'track_clicks' => 'boolean',
+            'archived_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function clientConsistentRelations(): array
+    {
+        return ['senderIdentity', 'emailTemplate', 'segment'];
     }
 
     /**
@@ -131,13 +148,103 @@ class Campaign extends Model
     }
 
     /**
+     * Follow-up emails, in order. The campaign's own content is the first email.
+     *
+     * @return HasMany<CampaignStep, $this>
+     */
+    public function steps(): HasMany
+    {
+        return $this->hasMany(CampaignStep::class)->orderBy('position');
+    }
+
+    /**
+     * Alternative versions (B, C, …) of the first email, for A/B testing.
+     *
+     * @return HasMany<CampaignVariant, $this>
+     */
+    public function firstEmailVariants(): HasMany
+    {
+        return $this->hasMany(CampaignVariant::class)->whereNull('campaign_step_id')->orderBy('position');
+    }
+
+    /**
+     * Every alternative version, of the first email and of follow-ups.
+     *
+     * @return HasMany<CampaignVariant, $this>
+     */
+    public function variants(): HasMany
+    {
+        return $this->hasMany(CampaignVariant::class);
+    }
+
+    /**
+     * @return HasMany<CampaignProspect, $this>
+     */
+    public function prospects(): HasMany
+    {
+        return $this->hasMany(CampaignProspect::class);
+    }
+
+    /**
+     * The follow-up that comes after the given step number (1 = the campaign's own email), or null after the last.
+     */
+    public function stepAfter(int $stepNumber): ?CampaignStep
+    {
+        if ($this->relationLoaded('steps')) {
+            return $this->steps->first(fn (CampaignStep $step): bool => $step->position >= $stepNumber);
+        }
+
+        return $this->steps()->where('position', '>=', $stepNumber)->first();
+    }
+
+    public function totalSteps(): int
+    {
+        return 1 + $this->steps()->count();
+    }
+
+    /**
+     * When the campaign may send to the contact. With "use prospect time zone", a contact's own valid time zone wins;
+     * otherwise the campaign's, then the client's.
+     */
+    public function sendingWindowFor(?Contact $contact = null): SendingWindow
+    {
+        $timezone = match (true) {
+            $this->use_prospect_timezone && SendingWindow::isValidTimezone($contact?->timezone) => $contact->timezone,
+            SendingWindow::isValidTimezone($this->timezone) => $this->timezone,
+            SendingWindow::isValidTimezone($this->client?->timezone) => $this->client->timezone,
+            default => config('app.timezone'),
+        };
+
+        return new SendingWindow(
+            days: $this->send_days === null ? null : array_map(intval(...), $this->send_days),
+            start: $this->send_window_start,
+            end: $this->send_window_end,
+            timezone: $timezone,
+        );
+    }
+
+    public function isArchived(): bool
+    {
+        return $this->archived_at !== null;
+    }
+
+    /**
+     * Drafts and finished campaigns can be archived; running ones cannot.
+     */
+    public function canBeArchived(): bool
+    {
+        return ! $this->isArchived() && ($this->status === CampaignStatus::Draft || $this->status->isFinished());
+    }
+
+    /**
      * Every contact in the audience, before suppression and consent checks.
      *
      * @return Builder<Contact>
      */
     public function audienceQuery(): Builder
     {
-        return match ($this->audience_type) {
+        // Pinned to the campaign's client explicitly: preparation runs in a queue job, where no client may be current.
+        $query = match ($this->audience_type) {
             AudienceType::AllContacts => Contact::query(),
             AudienceType::Lists => Contact::query()->whereHas(
                 'lists',
@@ -149,6 +256,8 @@ class Campaign extends Model
             ),
             AudienceType::Segment => $this->segment?->contactsQuery() ?? Contact::query()->whereRaw('1 = 0'),
         };
+
+        return $query->where('contacts.client_id', $this->client_id);
     }
 
     /**
@@ -240,7 +349,9 @@ class Campaign extends Model
             $this->submitted_at?->toIso8601String(),
             $this->updated_at?->toIso8601String(),
             $this->scheduled_at?->toIso8601String(),
-            $this->only(['name', 'purpose', 'sender_identity_id', 'email_template_id', 'subject', 'body', 'text_body', 'required_variables', 'audience_type', 'segment_id', 'send_rate_per_minute']),
+            $this->only(['name', 'purpose', 'sender_identity_id', 'email_template_id', 'subject', 'body', 'text_body', 'required_variables', 'audience_type', 'segment_id', 'send_rate_per_minute', 'send_days', 'send_window_start', 'send_window_end', 'timezone', 'use_prospect_timezone', 'track_opens', 'track_clicks']),
+            $this->steps()->get(['position', 'wait_days', 'condition', 'subject', 'body', 'text_body'])->toArray(),
+            $this->variants()->orderBy('id')->get(['campaign_step_id', 'position', 'weight', 'subject', 'body', 'text_body', 'is_active'])->toArray(),
             $this->lists()->pluck('contact_lists.id')->sort()->values()->all(),
             [(int) $selectedContacts?->total, (int) $selectedContacts?->id_sum],
         ]));
@@ -259,6 +370,11 @@ class Campaign extends Model
             return;
         }
 
+        // Follow-ups still waiting keep the campaign active.
+        if ($this->prospects()->active()->whereNotNull('next_step_due_at')->exists()) {
+            return;
+        }
+
         $attempted = $this->messages()->whereNotIn('status', [MessageStatus::Cancelled, MessageStatus::Suppressed])->count();
         $failed = $this->messages()->whereIn('status', [MessageStatus::Failed, MessageStatus::Unknown])->count();
 
@@ -268,11 +384,15 @@ class Campaign extends Model
             default => CampaignStatus::PartiallyFailed,
         };
 
-        static::query()
+        $completed = static::query()
             ->whereKey($this->getKey())
             ->where('status', CampaignStatus::Sending)
             ->update(['status' => $finalStatus, 'completed_at' => now()]);
 
         $this->refresh();
+
+        if ($completed === 1) {
+            app(OutreachEvents::class)->dispatch(OutreachEvent::CampaignCompleted, $this->client_id, null, ['campaign_id' => $this->getKey(), 'campaign' => $this->name, 'status' => $finalStatus->value], "campaign-completed:{$this->getKey()}:{$this->completed_at?->getTimestamp()}");
+        }
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\Contact;
 use App\Models\User;
 
@@ -12,7 +13,7 @@ class ContactPolicy
      */
     public function viewAny(User $user): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewProspects);
     }
 
     /**
@@ -20,7 +21,7 @@ class ContactPolicy
      */
     public function view(User $user, Contact $contact): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewProspects, $contact->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class ContactPolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canManageAudiences();
+        return $user->hasPermission(Permission::ManageProspects);
     }
 
     /**
@@ -36,7 +37,7 @@ class ContactPolicy
      */
     public function update(User $user, Contact $contact): bool
     {
-        return $user->role->canManageAudiences();
+        return $user->hasPermission(Permission::ManageProspects, $contact->client_id);
     }
 
     /**
@@ -44,7 +45,7 @@ class ContactPolicy
      */
     public function delete(User $user, Contact $contact): bool
     {
-        return $user->role->canManageAudiences();
+        return $user->hasPermission(Permission::ManageProspects, $contact->client_id);
     }
 
     /**
@@ -52,6 +53,6 @@ class ContactPolicy
      */
     public function deleteAny(User $user): bool
     {
-        return $user->role->canManageAudiences();
+        return $user->hasPermission(Permission::ManageProspects);
     }
 }

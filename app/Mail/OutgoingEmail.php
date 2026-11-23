@@ -41,7 +41,7 @@ class OutgoingEmail extends Mailable
             text: 'mail.outgoing-text',
             with: [
                 'senderName' => $this->emailMessage->senderIdentity->name,
-                'postalAddress' => config('prosend.marketing.postal_address'),
+                'postalAddress' => $this->emailMessage->client?->postalAddress() ?? config('prosend.marketing.postal_address'),
             ],
         );
     }

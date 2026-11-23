@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\Suppression;
 use App\Models\User;
 
@@ -12,7 +13,7 @@ class SuppressionPolicy
      */
     public function viewAny(User $user): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewProspects);
     }
 
     /**
@@ -20,7 +21,7 @@ class SuppressionPolicy
      */
     public function view(User $user, Suppression $suppression): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewProspects, $suppression->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class SuppressionPolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canManageAudiences();
+        return $user->hasPermission(Permission::ManageProspects);
     }
 
     /**
@@ -36,7 +37,7 @@ class SuppressionPolicy
      */
     public function update(User $user, Suppression $suppression): bool
     {
-        return $user->role->canManageAudiences();
+        return $user->hasPermission(Permission::ManageProspects, $suppression->client_id);
     }
 
     /**
@@ -44,7 +45,7 @@ class SuppressionPolicy
      */
     public function delete(User $user, Suppression $suppression): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageSuppressions, $suppression->client_id);
     }
 
     /**
@@ -52,6 +53,6 @@ class SuppressionPolicy
      */
     public function deleteAny(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageSuppressions);
     }
 }

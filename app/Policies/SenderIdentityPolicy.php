@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\SenderIdentity;
 use App\Models\User;
 
@@ -12,7 +13,7 @@ class SenderIdentityPolicy
      */
     public function viewAny(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageMailboxes);
     }
 
     /**
@@ -20,7 +21,7 @@ class SenderIdentityPolicy
      */
     public function view(User $user, SenderIdentity $senderIdentity): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageMailboxes, $senderIdentity->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class SenderIdentityPolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageMailboxes);
     }
 
     /**
@@ -36,7 +37,7 @@ class SenderIdentityPolicy
      */
     public function update(User $user, SenderIdentity $senderIdentity): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageMailboxes, $senderIdentity->client_id);
     }
 
     /**
@@ -44,7 +45,7 @@ class SenderIdentityPolicy
      */
     public function delete(User $user, SenderIdentity $senderIdentity): bool
     {
-        return $user->role->canManageInfrastructure()
+        return $user->hasPermission(Permission::ManageMailboxes, $senderIdentity->client_id)
             && ! $senderIdentity->campaigns()->exists()
             && ! $senderIdentity->emailMessages()->exists();
     }

@@ -5,7 +5,13 @@ namespace App\Models;
 use App\Enums\ConsentStatus;
 use App\Enums\ContactStage;
 use App\Enums\EmailPurpose;
+use App\Enums\OutreachEvent;
+use App\Enums\SequenceStatus;
 use App\Enums\SuppressionReason;
+use App\Models\Concerns\BelongsToClient;
+use App\Services\Automation\OutreachEvents;
+use App\Services\Campaigns\SequenceProgress;
+use Carbon\CarbonInterface;
 use Database\Factories\ContactFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Scope;
@@ -19,11 +25,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Str;
 
-#[Fillable(['email', 'first_name', 'last_name', 'company', 'job_title', 'industry', 'website', 'phone', 'source', 'stage', 'owner_id', 'tags', 'custom_attributes', 'consent_status', 'consent_source', 'consented_at', 'unsubscribed_at', 'last_contacted_at', 'last_replied_at', 'notes'])]
+#[Fillable(['email', 'first_name', 'last_name', 'company', 'job_title', 'industry', 'website', 'timezone', 'phone', 'source', 'stage', 'owner_id', 'tags', 'custom_attributes', 'consent_status', 'consent_source', 'consented_at', 'unsubscribed_at', 'last_contacted_at', 'last_replied_at', 'notes'])]
 class Contact extends Model
 {
     /** @use HasFactory<ContactFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     /**
      * @var array<string, mixed>
@@ -32,6 +38,30 @@ class Contact extends Model
         'consent_status' => 'unknown',
         'stage' => 'new',
     ];
+
+    /**
+     * A recorded reply ends the prospect's sequences: nobody gets a follow-up after answering.
+     */
+    protected static function booted(): void
+    {
+        static::created(fn (Contact $contact) => app(OutreachEvents::class)->dispatch(OutreachEvent::ProspectCreated, $contact->client_id, $contact, ['source' => $contact->source], "contact:{$contact->getKey()}"));
+
+        static::updated(function (Contact $contact): void {
+            if ($contact->wasChanged('stage')) {
+                app(OutreachEvents::class)->dispatch(OutreachEvent::ProspectStageChanged, $contact->client_id, $contact, [
+                    'previous_stage' => $contact->getOriginal('stage')?->value,
+                    'stage' => $contact->stage->value,
+                ], "stage:{$contact->getKey()}:{$contact->stage->value}:{$contact->updated_at?->getTimestamp()}");
+            }
+
+            $replied = ($contact->wasChanged('last_replied_at') && $contact->last_replied_at !== null)
+                || ($contact->wasChanged('stage') && $contact->stage->meansReplied());
+
+            if ($replied) {
+                rescue(fn () => app(SequenceProgress::class)->stopForContact($contact, SequenceStatus::Replied, 'Replied'));
+            }
+        });
+    }
 
     /**
      * @return array<string, string>
@@ -154,6 +184,15 @@ class Contact extends Model
         $escaped = str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $text);
 
         $query->whereRaw($query->getQuery()->getGrammar()->wrap($column)." like ? escape '!'", ["%{$escaped}%"]);
+    }
+
+    /**
+     * Whether a reply was recorded after the given moment. A stage change to Replied ends sequences when it happens,
+     * through the updated hook, so it is not checked here: a customer marked Converted long ago may join a new campaign.
+     */
+    public function hasRepliedSince(?CarbonInterface $moment): bool
+    {
+        return $this->last_replied_at !== null && ($moment === null || $this->last_replied_at->greaterThanOrEqualTo($moment));
     }
 
     /**

@@ -47,7 +47,7 @@ class ViewEmailMessage extends ViewRecord
                 ->modalSubmitAction(false)
                 ->modalCancelActionLabel('Close')
                 ->modalContent(function (EmailContentRenderer $renderer, EmailPreviewer $previewer) {
-                    $rendered = $renderer->render($this->record);
+                    $rendered = $renderer->render($this->record, track: false);
 
                     return view('filament.email-preview', [
                         'subject' => $rendered->subject,

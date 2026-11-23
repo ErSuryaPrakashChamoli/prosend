@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\EmailMessages\Pages;
 
 use App\Enums\MessageStatus;
+use App\Enums\Permission;
 use App\Filament\Exports\EmailMessageExporter;
 use App\Filament\Resources\EmailMessages\EmailMessageResource;
 use Filament\Actions\ExportAction;
@@ -22,7 +23,8 @@ class ListEmailMessages extends ListRecords
                 ->label('Export')
                 ->icon(Heroicon::OutlinedArrowDownTray)
                 ->color('gray')
-                ->exporter(EmailMessageExporter::class),
+                ->exporter(EmailMessageExporter::class)
+                ->authorize(fn (): bool => auth()->user()->hasPermission(Permission::ExportActivity)),
         ];
     }
 

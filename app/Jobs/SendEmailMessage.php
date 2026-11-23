@@ -7,6 +7,8 @@ use App\Enums\EmailEventType;
 use App\Enums\MessageStatus;
 use App\Enums\ProviderHealth;
 use App\Enums\SendFailureKind;
+use App\Enums\SequenceStatus;
+use App\Models\CampaignProspect;
 use App\Models\EmailMessage;
 use App\Models\EmailMessageAttempt;
 use App\Models\SmtpProvider;
@@ -15,6 +17,7 @@ use App\Services\Providers\MailProviderManager;
 use App\Services\Sending\EmailSender;
 use App\Services\Sending\RecipientEligibility;
 use App\Services\Sending\SendFailure;
+use App\Services\Tenancy\CurrentClient;
 use App\Services\Warmup\WarmupGate;
 use Carbon\CarbonInterface;
 use DateInterval;
@@ -65,7 +68,15 @@ class SendEmailMessage implements ShouldQueue
         return $dueAt->addDays(2);
     }
 
+    /**
+     * Runs as the message's client, so every query inside is limited to that client's data.
+     */
     public function handle(EmailSender $sender, RecipientEligibility $eligibility, WarmupGate $warmupGate, MailProviderManager $providers): void
+    {
+        app(CurrentClient::class)->runAsClientId($this->message->client_id, fn () => $this->process($sender, $eligibility, $warmupGate, $providers));
+    }
+
+    private function process(EmailSender $sender, RecipientEligibility $eligibility, WarmupGate $warmupGate, MailProviderManager $providers): void
     {
         $message = $this->message->refresh();
 
@@ -88,6 +99,16 @@ class SendEmailMessage implements ShouldQueue
         if ($campaignStatus === CampaignStatus::Cancelled) {
             $message->forceFill(['status' => MessageStatus::Cancelled])->save();
             $message->recordEvent(EmailEventType::Cancelled);
+
+            return;
+        }
+
+        // The prospect replied, unsubscribed or was stopped after this email was queued.
+        $endedSequence = $this->endedSequenceReason($message);
+
+        if ($endedSequence !== null) {
+            $message->cancelForEndedSequence($endedSequence);
+            $message->campaign->syncCompletionStatus();
 
             return;
         }
@@ -143,6 +164,14 @@ class SendEmailMessage implements ShouldQueue
             return;
         }
 
+        $windowOpensAt = $this->sendingWindowOpening($message);
+
+        if ($windowOpensAt !== null) {
+            $this->waitForSendingWindow($message, $windowOpensAt);
+
+            return;
+        }
+
         if ($provider->remainingQuota() === 0) {
             $this->waitUntil($message, now()->addDay()->startOfDay()->addMinute(), "The sending limit for {$provider->name} has been reached.");
 
@@ -158,7 +187,7 @@ class SendEmailMessage implements ShouldQueue
             return;
         }
 
-        $rateLimitWait = $this->rateLimitWait($provider, $warmupPlan, $message->to_email);
+        $rateLimitWait = $this->rateLimitWait($provider, $warmupPlan, $message);
 
         if ($rateLimitWait !== null) {
             $this->release($rateLimitWait);
@@ -254,8 +283,9 @@ class SendEmailMessage implements ShouldQueue
             return;
         }
 
-        // A campaign's messages are created together, so their ids give each one its place in line.
-        $position = $message->getKey() - (int) $campaign->messages()->min('id');
+        // Its place in line among the campaign's emails that are waiting too. Follow-ups are created days after the first
+        // emails, so their ids alone would put them far back in the line.
+        $position = $campaign->messages()->whereIn('status', [MessageStatus::Queued, MessageStatus::Deferred])->where('id', '<', $message->getKey())->count();
 
         static::dispatch($message)->delay($availableAt->copy()->addSeconds((int) floor($position * 60 / max(1, $campaign->send_rate_per_minute))));
     }
@@ -265,13 +295,15 @@ class SendEmailMessage implements ShouldQueue
      * used up. Checked only after every other gate, so email that is waiting for another reason does not use
      * up the budget.
      */
-    private function rateLimitWait(SmtpProvider $provider, ?WarmupPlan $plan, string $recipientEmail): ?int
+    private function rateLimitWait(SmtpProvider $provider, ?WarmupPlan $plan, EmailMessage $message): ?int
     {
-        $recipientDomain = Str::lower(Str::afterLast($recipientEmail, '@'));
+        $recipientDomain = Str::lower(Str::afterLast($message->to_email, '@'));
 
         $limits = array_filter([
             "smtp-provider:{$provider->getKey()}" => $provider->max_per_minute,
             "warmup-plan:{$plan?->getKey()}" => $plan?->max_per_minute,
+            // Follow-ups and emails held back by a sending window can become due together; the campaign's rate still holds.
+            "campaign:{$message->campaign_id}" => $message->campaign?->send_rate_per_minute,
             // Read as a whole array: domain names contain dots, which config() would treat as nested keys.
             "recipient-domain:{$recipientDomain}" => config('prosend.sending.recipient_domain_limits', [])[$recipientDomain] ?? null,
         ]);
@@ -287,6 +319,63 @@ class SendEmailMessage implements ShouldQueue
         }
 
         return null;
+    }
+
+    /**
+     * Why a campaign email must not go out because its prospect's sequence ended, or null.
+     */
+    private function endedSequenceReason(EmailMessage $message): ?string
+    {
+        if ($message->campaign_id === null || $message->contact_id === null) {
+            return null;
+        }
+
+        $prospect = CampaignProspect::query()
+            ->where('campaign_id', $message->campaign_id)
+            ->where('contact_id', $message->contact_id)
+            ->first();
+
+        if ($prospect === null) {
+            return null;
+        }
+
+        // A last line of defence: a reply recorded since the prospect joined ends the sequence, however it was recorded.
+        if ($prospect->isActive() && $message->step_number > 1 && $prospect->contact->hasRepliedSince($prospect->created_at)) {
+            $prospect->finish(SequenceStatus::Replied, 'Replied');
+        }
+
+        return $prospect->isActive()
+            ? null
+            : "Not sent: the prospect's sequence ended ({$prospect->status->getLabel()}: {$prospect->finish_reason}).";
+    }
+
+    /**
+     * When the campaign's sending window next opens for this recipient, or null when it is open now.
+     */
+    private function sendingWindowOpening(EmailMessage $message): ?CarbonInterface
+    {
+        $window = $message->campaign?->sendingWindowFor($message->contact);
+
+        if ($window === null || $window->isUnrestricted() || $window->contains(now())) {
+            return null;
+        }
+
+        return $window->nextOpening(now());
+    }
+
+    /**
+     * Hold the email until the window opens. Emails released together are spread over the first minutes, and the
+     * campaign's per-minute rate applies when they are sent.
+     */
+    private function waitForSendingWindow(EmailMessage $message, CarbonInterface $opensAt): void
+    {
+        $reason = 'Waiting for the campaign\'s sending window: '.$message->campaign->sendingWindowFor($message->contact)->describe().'.';
+
+        if ($message->status !== MessageStatus::Deferred || $message->error_message !== $reason) {
+            $message->markDeferred($reason);
+        }
+
+        static::dispatch($message)->delay($opensAt->copy()->addSeconds($message->getKey() % 300));
     }
 
     /**

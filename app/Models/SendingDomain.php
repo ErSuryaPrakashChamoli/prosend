@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\DnsCheckStatus;
 use App\Enums\ProviderType;
+use App\Models\Concerns\BelongsToClient;
 use Database\Factories\SendingDomainFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
@@ -18,7 +19,7 @@ use Illuminate\Support\Str;
 class SendingDomain extends Model
 {
     /** @use HasFactory<SendingDomainFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     /**
      * Brevo publishes DKIM as two CNAMEs (brevo1, brevo2) for newer accounts, or one TXT record (mail) for older ones.
@@ -84,6 +85,14 @@ class SendingDomain extends Model
             'provider_dns_records' => 'array',
             'provider_checked_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function clientConsistentRelations(): array
+    {
+        return ['smtpProvider'];
     }
 
     /**

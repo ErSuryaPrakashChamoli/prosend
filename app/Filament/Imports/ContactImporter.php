@@ -3,8 +3,12 @@
 namespace App\Filament\Imports;
 
 use App\Enums\ConsentStatus;
+use App\Enums\OutreachEvent;
+use App\Jobs\Middleware\RunAsClient;
 use App\Models\Contact;
 use App\Models\ContactList;
+use App\Services\Automation\OutreachEvents;
+use App\Services\Tenancy\CurrentClient;
 use Filament\Actions\Imports\ImportColumn;
 use Filament\Actions\Imports\Importer;
 use Filament\Actions\Imports\Models\Import;
@@ -14,6 +18,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Utilities\Get;
 use Illuminate\Support\Number;
 use Illuminate\Support\Str;
+use LogicException;
 
 /**
  * Imports contacts from CSV. Existing contacts (matched by email) are updated only where the file has a
@@ -47,6 +52,8 @@ class ContactImporter extends Importer
                 ->castStateUsing(fn (?string $state): ?string => Contact::normalizeWebsite(static::withoutFormulaEscape($state)))
                 ->rules(['nullable', 'string', 'max:255', 'url:http,https']),
             static::optionalTextColumn('phone', ['phone number', 'mobile', 'telephone'], '+1 555 0100', maxLength: 50),
+            static::optionalTextColumn('timezone', ['time zone', 'tz'], 'Asia/Kolkata', maxLength: 64)
+                ->rules(['nullable', 'string', 'timezone:all']),
             ImportColumn::make('tags')
                 ->array(',')
                 ->example('customer,newsletter')
@@ -92,11 +99,33 @@ class ContactImporter extends Importer
         ];
     }
 
+    /**
+     * Imports run on the queue. The client that started the import travels in its options, and every chunk runs as that
+     * client, so rows can only ever match or create that client's contacts.
+     *
+     * @return array<int, object>
+     */
+    public function getJobMiddleware(): array
+    {
+        return [...parent::getJobMiddleware(), new RunAsClient($this->clientId())];
+    }
+
     public function resolveRecord(): Contact
     {
-        return Contact::query()->firstOrNew([
-            'email' => Str::lower(trim((string) $this->data['email'])),
-        ]);
+        $email = Str::lower(trim((string) $this->data['email']));
+
+        return Contact::acrossClients()->where('client_id', $this->clientId())->where('email', $email)->first()
+            ?? (new Contact)->forceFill(['client_id' => $this->clientId(), 'email' => $email]);
+    }
+
+    /**
+     * Imports started before clients were recorded in the options fall back to the tenant Filament restores.
+     */
+    private function clientId(): int
+    {
+        return (int) ($this->options['client_id']
+            ?? app(CurrentClient::class)->id()
+            ?? throw new LogicException('This import does not say which client it is for. Start it again from the contacts page.'));
     }
 
     protected function beforeCreate(): void
@@ -110,8 +139,14 @@ class ContactImporter extends Importer
 
     protected function afterSave(): void
     {
-        if (filled($this->options['contact_list_id'] ?? null)) {
-            $this->record->lists()->syncWithoutDetaching([(int) $this->options['contact_list_id']]);
+        if ($this->record->wasRecentlyCreated) {
+            app(OutreachEvents::class)->dispatch(OutreachEvent::ProspectImported, $this->record->client_id, $this->record, ['source' => $this->record->source], "import:{$this->record->getKey()}");
+        }
+
+        $listId = (int) ($this->options['contact_list_id'] ?? 0);
+
+        if ($listId > 0 && ContactList::acrossClients()->where('client_id', $this->clientId())->whereKey($listId)->exists()) {
+            $this->record->lists()->syncWithoutDetaching([$listId]);
         }
     }
 

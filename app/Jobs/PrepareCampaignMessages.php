@@ -3,10 +3,13 @@
 namespace App\Jobs;
 
 use App\Enums\CampaignStatus;
+use App\Enums\OutreachEvent;
 use App\Models\Campaign;
 use App\Services\AuditLogger;
+use App\Services\Automation\OutreachEvents;
 use App\Services\Campaigns\CampaignApprovalNotifier;
 use App\Services\Campaigns\CampaignDispatcher;
+use App\Services\Tenancy\CurrentClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
@@ -41,7 +44,15 @@ class PrepareCampaignMessages implements ShouldQueue
         ];
     }
 
+    /**
+     * Runs as the campaign's client, so every query inside is limited to that client's data.
+     */
     public function handle(CampaignDispatcher $dispatcher, CampaignApprovalNotifier $notifier, AuditLogger $auditLogger): void
+    {
+        app(CurrentClient::class)->runAsClientId($this->campaign->client_id, fn () => $this->process($dispatcher, $notifier, $auditLogger));
+    }
+
+    private function process(CampaignDispatcher $dispatcher, CampaignApprovalNotifier $notifier, AuditLogger $auditLogger): void
     {
         $campaign = $this->campaign->refresh();
 
@@ -62,6 +73,8 @@ class PrepareCampaignMessages implements ShouldQueue
             return;
         }
 
+        $isFirstStart = $campaign->started_at === null;
+
         $started = Campaign::query()
             ->whereKey($campaign->getKey())
             ->whereIn('status', [CampaignStatus::Scheduled, CampaignStatus::Queued, CampaignStatus::Sending])
@@ -75,6 +88,10 @@ class PrepareCampaignMessages implements ShouldQueue
         }
 
         $campaign->refresh();
+
+        if ($isFirstStart) {
+            app(OutreachEvents::class)->dispatch(OutreachEvent::CampaignStarted, $campaign->client_id, null, ['campaign_id' => $campaign->getKey(), 'campaign' => $campaign->name], "campaign-started:{$campaign->getKey()}");
+        }
 
         $dispatcher->createMessages($campaign);
         $dispatcher->dispatchPending($campaign);

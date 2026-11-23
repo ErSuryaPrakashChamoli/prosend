@@ -8,6 +8,7 @@ use App\Models\Campaign;
 use App\Models\User;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * Tells the people involved in a campaign's approval what changed, in the panel's notification list.
@@ -15,13 +16,16 @@ use Filament\Notifications\Notification;
 class CampaignApprovalNotifier
 {
     /**
-     * Notify every administrator who may approve the campaign now, except the person who caused the change.
+     * Notify everyone who may approve the campaign now, except the person who caused the change: Super Admins, and
+     * members of the campaign's client whose role grants approval.
      */
     public function notifyApprovers(Campaign $campaign, string $title, string $body, ?User $except = null): void
     {
         $approvers = User::query()
-            ->where('role', UserRole::Admin)
-            ->when($except, fn ($query) => $query->whereKeyNot($except->getKey()))
+            ->where(fn (Builder $users) => $users
+                ->where('role', UserRole::Admin)
+                ->orWhereHas('memberships', fn (Builder $memberships) => $memberships->where('client_id', $campaign->client_id)))
+            ->when($except, fn (Builder $query) => $query->whereKeyNot($except->getKey()))
             ->get()
             ->filter(fn (User $user): bool => $user->can('approve', $campaign));
 
@@ -54,7 +58,7 @@ class CampaignApprovalNotifier
             ->actions([
                 Action::make('view')
                     ->label('Open campaign')
-                    ->url(CampaignResource::getUrl('view', ['record' => $campaign])),
+                    ->url(CampaignResource::getUrl('view', ['record' => $campaign], tenant: $campaign->client)),
             ]);
     }
 }

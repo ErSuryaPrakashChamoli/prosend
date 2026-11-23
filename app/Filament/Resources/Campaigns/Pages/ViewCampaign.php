@@ -15,6 +15,8 @@ use App\Enums\MessageStatus;
 use App\Filament\Resources\Campaigns\CampaignResource;
 use App\Filament\Resources\Campaigns\Widgets\CampaignProgress;
 use App\Models\Campaign;
+use App\Models\CampaignVariant;
+use App\Services\AuditLogger;
 use App\Services\Campaigns\CampaignReadiness;
 use App\Services\Campaigns\ReadinessReport;
 use App\Services\Sending\EmailPreviewer;
@@ -23,6 +25,7 @@ use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
@@ -62,8 +65,10 @@ class ViewCampaign extends ViewRecord
                 $this->duplicateAction(),
                 $this->campaignAction('retryFailures', 'Retry failed emails', Heroicon::OutlinedArrowPath, 'gray', RetryFailedCampaignMessages::class, 'Failed emails queued again', fn (Campaign $campaign): bool => in_array($campaign->status, [CampaignStatus::Completed, CampaignStatus::PartiallyFailed, CampaignStatus::Failed], true) && $campaign->messages()->where('status', MessageStatus::Failed)->where('is_retryable', true)->exists())
                     ->modalDescription('Only temporary and configuration failures are retried. Rejected addresses and emails with an unknown outcome are not, to avoid duplicates.'),
-                $this->campaignAction('cancel', 'Cancel campaign', Heroicon::OutlinedXCircle, 'danger', CancelCampaign::class, 'Campaign cancelled', fn (Campaign $campaign): bool => $campaign->status->canBeCancelled())
-                    ->modalDescription('Emails that have not been sent yet will not be sent. This cannot be undone.'),
+                $this->stopVersionAction(),
+                $this->archiveAction(),
+                $this->campaignAction('cancel', 'Stop campaign', Heroicon::OutlinedXCircle, 'danger', CancelCampaign::class, 'Campaign stopped', fn (Campaign $campaign): bool => $campaign->status->canBeCancelled())
+                    ->modalDescription('Emails that have not been sent yet, including every pending follow-up, will not be sent. This cannot be undone.'),
             ])->label('More')->icon(Heroicon::OutlinedEllipsisVertical)->button()->color('gray'),
         ];
     }
@@ -313,6 +318,52 @@ class ViewCampaign extends ViewRecord
             });
     }
 
+    /**
+     * Stops giving an A/B version to emails not created yet, for example once another version has won. Emails that
+     * already carry it are unaffected; version A cannot be stopped, so every prospect still gets an email.
+     */
+    private function stopVersionAction(): Action
+    {
+        return Action::make('stopVersion')
+            ->label('Stop an A/B version')
+            ->icon(Heroicon::OutlinedBeaker)
+            ->visible(fn (): bool => auth()->user()->can('operate', $this->record) && $this->record->variants()->where('is_active', true)->exists())
+            ->schema([
+                Select::make('variant')
+                    ->label('Version')
+                    ->options(fn (): array => $this->record->variants()->with('step')->where('is_active', true)->get()
+                        ->mapWithKeys(fn (CampaignVariant $variant): array => [$variant->getKey() => 'Version '.$variant->label().' of '.($variant->step === null ? 'the first email' : 'follow-up step '.$variant->step->stepNumber())])
+                        ->all())
+                    ->required(),
+            ])
+            ->modalDescription('Prospects who have not had this email yet get the remaining versions instead. Emails already created keep their version.')
+            ->action(function (array $data, AuditLogger $auditLogger): void {
+                $variant = $this->record->variants()->whereKey($data['variant'])->firstOrFail();
+                $variant->forceFill(['is_active' => false])->save();
+                $auditLogger->record('campaign.ab_version_stopped', $this->record, ['version' => $variant->label(), 'step' => $variant->step?->stepNumber() ?? 1]);
+
+                Notification::make()->title("Version {$variant->label()} stopped")->success()->send();
+            });
+    }
+
+    /**
+     * Archived campaigns leave the default campaign list; their results stay readable.
+     */
+    private function archiveAction(): Action
+    {
+        return Action::make('archive')
+            ->label(fn (): string => $this->record->isArchived() ? 'Restore from archive' : 'Archive')
+            ->icon(Heroicon::OutlinedArchiveBox)
+            ->visible(fn (): bool => auth()->user()->can('archive', $this->record))
+            ->action(function (AuditLogger $auditLogger): void {
+                $archiving = ! $this->record->isArchived();
+                $this->record->forceFill(['archived_at' => $archiving ? now() : null])->save();
+                $auditLogger->record($archiving ? 'campaign.archived' : 'campaign.unarchived', $this->record);
+
+                Notification::make()->title($archiving ? 'Campaign archived' : 'Campaign restored')->success()->send();
+            });
+    }
+
     private function duplicateAction(): Action
     {
         return Action::make('duplicate')
@@ -320,7 +371,7 @@ class ViewCampaign extends ViewRecord
             ->icon(Heroicon::OutlinedDocumentDuplicate)
             ->visible(fn (): bool => CampaignResource::canCreate())
             ->action(function (): void {
-                $copy = $this->record->replicate(['status', 'scheduled_at', 'started_at', 'prepared_at', 'completed_at', 'batch_id', 'submitted_by', 'submitted_at', 'approved_by', 'approved_at', 'approved_recipient_count', 'review_note']);
+                $copy = $this->record->replicate(['status', 'scheduled_at', 'started_at', 'prepared_at', 'completed_at', 'archived_at', 'batch_id', 'submitted_by', 'submitted_at', 'approved_by', 'approved_at', 'approved_recipient_count', 'review_note']);
                 $copy->name = 'Copy of '.$this->record->name;
                 $copy->status = CampaignStatus::Draft;
                 $copy->created_by = auth()->id();
@@ -328,6 +379,19 @@ class ViewCampaign extends ViewRecord
 
                 $copy->lists()->sync($this->record->lists()->pluck('contact_lists.id'));
                 $copy->selectedContacts()->sync($this->record->selectedContacts()->pluck('contacts.id'));
+
+                // Stopped versions are not copied: the form cannot show them, and a new campaign starts every version afresh.
+                foreach ($this->record->firstEmailVariants->where('is_active', true) as $variant) {
+                    $copy->firstEmailVariants()->create($variant->only(['position', 'weight', 'subject', 'body', 'text_body', 'is_active']));
+                }
+
+                foreach ($this->record->steps as $step) {
+                    $stepCopy = $copy->steps()->create($step->only(['position', 'wait_days', 'condition', 'subject', 'body', 'text_body']));
+
+                    foreach ($step->variants->where('is_active', true) as $variant) {
+                        $stepCopy->variants()->create($variant->only(['position', 'weight', 'subject', 'body', 'text_body', 'is_active']));
+                    }
+                }
 
                 $this->redirect(CampaignResource::getUrl('edit', ['record' => $copy]));
             });

@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\EmailMessage;
 use App\Models\User;
 
@@ -12,7 +13,7 @@ class EmailMessagePolicy
      */
     public function viewAny(User $user): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewActivity);
     }
 
     /**
@@ -20,7 +21,7 @@ class EmailMessagePolicy
      */
     public function view(User $user, EmailMessage $emailMessage): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewActivity, $emailMessage->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class EmailMessagePolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canSendEmail();
+        return $user->hasPermission(Permission::ComposeEmail);
     }
 
     /**
@@ -36,6 +37,7 @@ class EmailMessagePolicy
      */
     public function retry(User $user, EmailMessage $emailMessage): bool
     {
-        return $user->role->canSendEmail();
+        return $user->hasPermission(Permission::ComposeEmail, $emailMessage->client_id)
+            || $user->hasPermission(Permission::OperateCampaigns, $emailMessage->client_id);
     }
 }

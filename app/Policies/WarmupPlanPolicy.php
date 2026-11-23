@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\User;
 use App\Models\WarmupPlan;
 
@@ -12,7 +13,7 @@ class WarmupPlanPolicy
      */
     public function viewAny(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability);
     }
 
     /**
@@ -20,7 +21,7 @@ class WarmupPlanPolicy
      */
     public function view(User $user, WarmupPlan $warmupPlan): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability, $warmupPlan->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class WarmupPlanPolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability);
     }
 
     /**
@@ -36,7 +37,7 @@ class WarmupPlanPolicy
      */
     public function update(User $user, WarmupPlan $warmupPlan): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability, $warmupPlan->client_id);
     }
 
     /**
@@ -44,6 +45,6 @@ class WarmupPlanPolicy
      */
     public function delete(User $user, WarmupPlan $warmupPlan): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability, $warmupPlan->client_id);
     }
 }

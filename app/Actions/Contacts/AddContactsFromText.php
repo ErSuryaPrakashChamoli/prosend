@@ -3,10 +3,14 @@
 namespace App\Actions\Contacts;
 
 use App\Enums\ConsentStatus;
+use App\Enums\OutreachEvent;
 use App\Models\Contact;
 use App\Models\ContactList;
+use App\Services\Automation\OutreachEvents;
+use App\Services\Tenancy\CurrentClient;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use LogicException;
 
 /**
  * Adds contacts from pasted text, such as a column copied from a spreadsheet or "Name <email>" lines.
@@ -16,11 +20,16 @@ class AddContactsFromText
 {
     public const MAX_ADDRESSES = 5000;
 
+    public function __construct(private CurrentClient $currentClient) {}
+
     /**
      * @return array{created: int, existing: int, invalid: list<string>, truncated: bool}
      */
     public function handle(string $text, ?ContactList $list = null, ConsentStatus $consent = ConsentStatus::Unknown, ?string $consentSource = null): array
     {
+        // Rows are inserted in bulk, without model events, so the client is set here.
+        $clientId = $list?->client_id ?? $this->currentClient->id() ?? throw new LogicException('Contacts can only be added for a client.');
+
         preg_match_all('/[^\s<>,;"\'()\[\]]+@[^\s<>,;"\'()\[\]]+/u', $text, $matches);
 
         $candidates = collect($matches[0])
@@ -42,12 +51,21 @@ class AddContactsFromText
 
         foreach ($new->chunk(500) as $chunk) {
             $created += Contact::query()->fillAndInsertOrIgnore($chunk->map(fn (string $email): array => [
+                'client_id' => $clientId,
                 'email' => $email,
                 'source' => 'Pasted list',
                 'consent_status' => $consent,
                 'consent_source' => $consent === ConsentStatus::Granted ? $consentSource : null,
                 'consented_at' => $consent === ConsentStatus::Granted ? now() : null,
             ])->values()->all());
+        }
+
+        // Bulk inserts skip model events, so new contacts are announced here.
+        if ($created > 0) {
+            Contact::query()->whereIn('email', $new->all())->each(function (Contact $contact): void {
+                app(OutreachEvents::class)->dispatch(OutreachEvent::ProspectCreated, $contact->client_id, $contact, ['source' => $contact->source], "contact:{$contact->getKey()}");
+                app(OutreachEvents::class)->dispatch(OutreachEvent::ProspectImported, $contact->client_id, $contact, ['source' => $contact->source], "import:{$contact->getKey()}");
+            });
         }
 
         if ($list !== null && $valid->isNotEmpty()) {

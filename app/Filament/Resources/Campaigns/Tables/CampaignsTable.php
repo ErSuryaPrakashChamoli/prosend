@@ -5,12 +5,14 @@ namespace App\Filament\Resources\Campaigns\Tables;
 use App\Enums\CampaignStatus;
 use App\Enums\EmailPurpose;
 use App\Enums\MessageStatus;
+use App\Enums\SequenceStatus;
 use App\Models\Campaign;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -23,6 +25,9 @@ class CampaignsTable
                 ->with('senderIdentity')
                 ->withCount([
                     'messages',
+                    'prospects',
+                    'prospects as replied_count' => fn (Builder $prospects) => $prospects->where('status', SequenceStatus::Replied),
+                    'steps',
                     'messages as accepted_count' => fn (Builder $messages) => $messages->whereIn('status', MessageStatus::acceptedByProvider()),
                     'messages as delivered_count' => fn (Builder $messages) => $messages->where('status', MessageStatus::Delivered),
                     'messages as problem_count' => fn (Builder $messages) => $messages->whereIn('status', [MessageStatus::Failed, MessageStatus::Bounced, MessageStatus::Complained, MessageStatus::Unknown]),
@@ -39,9 +44,16 @@ class CampaignsTable
                 TextColumn::make('purpose')
                     ->badge()
                     ->toggleable(),
-                TextColumn::make('messages_count')
+                TextColumn::make('prospects_count')
                     ->label('Recipients')
+                    // Campaigns sent before sequences existed have emails but no prospect records.
+                    ->state(fn (Campaign $record): int => $record->prospects_count > 0 ? $record->prospects_count : $record->messages_count)
+                    ->description(fn (Campaign $record): ?string => $record->steps_count > 0 ? (1 + $record->steps_count).' steps' : null)
                     ->numeric(),
+                TextColumn::make('replied_count')
+                    ->label('Replied')
+                    ->numeric()
+                    ->toggleable(),
                 TextColumn::make('accepted_count')
                     ->label('Accepted')
                     ->numeric()
@@ -67,6 +79,16 @@ class CampaignsTable
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
+                TernaryFilter::make('archived')
+                    ->label('Archived')
+                    ->placeholder('Hide archived')
+                    ->trueLabel('Only archived')
+                    ->falseLabel('All campaigns')
+                    ->queries(
+                        true: fn (Builder $query) => $query->whereNotNull('archived_at'),
+                        false: fn (Builder $query) => $query,
+                        blank: fn (Builder $query) => $query->whereNull('archived_at'),
+                    ),
                 SelectFilter::make('status')
                     ->options(CampaignStatus::class)
                     ->multiple(),
@@ -78,7 +100,7 @@ class CampaignsTable
                 EditAction::make(),
             ])
             ->emptyStateHeading('No campaigns yet')
-            ->emptyStateDescription('Create a campaign to send one email to a list or a selection of contacts.')
+            ->emptyStateDescription('Create a campaign to send an email, with optional follow-ups, to a list, a segment or chosen prospects.')
             ->emptyStateIcon(Heroicon::OutlinedMegaphone);
     }
 }

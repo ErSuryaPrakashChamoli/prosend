@@ -9,6 +9,7 @@ use App\Filament\Widgets\CampaignPerformanceTable;
 use App\Filament\Widgets\DeliveryOutcomeChart;
 use App\Filament\Widgets\DeliveryStatsOverview;
 use App\Filament\Widgets\OperationsOverview;
+use App\Filament\Widgets\OutreachOverview;
 use App\Filament\Widgets\ProviderPerformanceTable;
 use App\Filament\Widgets\QueueThroughputChart;
 use App\Filament\Widgets\SendingVolumeChart;
@@ -75,6 +76,7 @@ class Dashboard extends BaseDashboard
     public function getWidgets(): array
     {
         return [
+            OutreachOverview::class,
             DeliveryStatsOverview::class,
             SendingVolumeChart::class,
             DeliveryOutcomeChart::class,

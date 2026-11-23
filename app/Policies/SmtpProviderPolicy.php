@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\SmtpProvider;
 use App\Models\User;
 
@@ -12,7 +13,7 @@ class SmtpProviderPolicy
      */
     public function viewAny(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageMailboxes);
     }
 
     /**
@@ -20,7 +21,7 @@ class SmtpProviderPolicy
      */
     public function view(User $user, SmtpProvider $smtpProvider): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageMailboxes, $smtpProvider->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class SmtpProviderPolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageMailboxes);
     }
 
     /**
@@ -36,7 +37,7 @@ class SmtpProviderPolicy
      */
     public function update(User $user, SmtpProvider $smtpProvider): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageMailboxes, $smtpProvider->client_id);
     }
 
     /**
@@ -44,7 +45,7 @@ class SmtpProviderPolicy
      */
     public function delete(User $user, SmtpProvider $smtpProvider): bool
     {
-        return $user->role->canManageInfrastructure()
+        return $user->hasPermission(Permission::ManageMailboxes, $smtpProvider->client_id)
             && ! $smtpProvider->senderIdentities()->exists()
             && ! $smtpProvider->emailMessages()->exists();
     }

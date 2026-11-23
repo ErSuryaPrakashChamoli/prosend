@@ -12,6 +12,8 @@ enum ProviderType: string implements HasColor, HasLabel
     case Smtp = 'smtp';
     case Mailtrap = 'mailtrap';
     case MailtrapSandbox = 'mailtrap_sandbox';
+    case Gmail = 'gmail';
+    case Microsoft365 = 'microsoft365';
 
     public function getLabel(): string
     {
@@ -20,6 +22,8 @@ enum ProviderType: string implements HasColor, HasLabel
             self::Smtp => 'Generic SMTP',
             self::Mailtrap => 'Mailtrap Email Sending',
             self::MailtrapSandbox => 'Mailtrap Email Sandbox (testing only)',
+            self::Gmail => 'Gmail / Google Workspace (OAuth)',
+            self::Microsoft365 => 'Microsoft 365 / Outlook (OAuth)',
         };
     }
 
@@ -43,12 +47,36 @@ enum ProviderType: string implements HasColor, HasLabel
             self::Smtp => null,
             self::Mailtrap => 'live.smtp.mailtrap.io',
             self::MailtrapSandbox => 'sandbox.smtp.mailtrap.io',
+            self::Gmail => 'gmail.googleapis.com',
+            self::Microsoft365 => 'graph.microsoft.com',
         };
     }
 
     public function defaultPort(): int
     {
-        return $this === self::MailtrapSandbox ? 2525 : 587;
+        return match ($this) {
+            self::MailtrapSandbox => 2525,
+            self::Gmail, self::Microsoft365 => 443,
+            default => 587,
+        };
+    }
+
+    /**
+     * Connected with OAuth and sending through the provider's HTTPS API, never with a password.
+     */
+    public function usesOAuth(): bool
+    {
+        return in_array($this, [self::Gmail, self::Microsoft365], true);
+    }
+
+    /**
+     * Types that can be added with the provider form. OAuth mailboxes are connected with their own button instead.
+     *
+     * @return list<self>
+     */
+    public static function configurable(): array
+    {
+        return array_values(array_filter(self::cases(), fn (self $type): bool => ! $type->usesOAuth()));
     }
 
     /**
@@ -69,6 +97,8 @@ enum ProviderType: string implements HasColor, HasLabel
         return match ($this) {
             self::Mailtrap => ['live.smtp.mailtrap.io', 'bulk.smtp.mailtrap.io'],
             self::MailtrapSandbox => ['sandbox.smtp.mailtrap.io'],
+            self::Gmail => ['gmail.googleapis.com'],
+            self::Microsoft365 => ['graph.microsoft.com'],
             default => null,
         };
     }
@@ -100,6 +130,10 @@ enum ProviderType: string implements HasColor, HasLabel
      */
     public function compatibleTypes(): array
     {
-        return array_values(array_filter(self::cases(), fn (self $type): bool => $type->isSandbox() === $this->isSandbox()));
+        if ($this->usesOAuth()) {
+            return [$this];
+        }
+
+        return array_values(array_filter(self::configurable(), fn (self $type): bool => $type->isSandbox() === $this->isSandbox()));
     }
 }

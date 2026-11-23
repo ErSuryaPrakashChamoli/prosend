@@ -21,6 +21,8 @@ class MailProviderManager
             ProviderType::Brevo => BrevoDriver::class,
             ProviderType::Smtp => SmtpDriver::class,
             ProviderType::Mailtrap, ProviderType::MailtrapSandbox => MailtrapDriver::class,
+            ProviderType::Gmail => GmailApiDriver::class,
+            ProviderType::Microsoft365 => MicrosoftGraphDriver::class,
         });
     }
 

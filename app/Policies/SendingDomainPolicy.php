@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\SendingDomain;
 use App\Models\User;
 
@@ -12,7 +13,7 @@ class SendingDomainPolicy
      */
     public function viewAny(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability);
     }
 
     /**
@@ -20,7 +21,7 @@ class SendingDomainPolicy
      */
     public function view(User $user, SendingDomain $sendingDomain): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability, $sendingDomain->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class SendingDomainPolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability);
     }
 
     /**
@@ -36,7 +37,7 @@ class SendingDomainPolicy
      */
     public function update(User $user, SendingDomain $sendingDomain): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability, $sendingDomain->client_id);
     }
 
     /**
@@ -44,6 +45,6 @@ class SendingDomainPolicy
      */
     public function delete(User $user, SendingDomain $sendingDomain): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageDeliverability, $sendingDomain->client_id);
     }
 }

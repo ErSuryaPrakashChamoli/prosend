@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\Segment;
 use App\Models\User;
 
@@ -12,7 +13,7 @@ class SegmentPolicy
      */
     public function viewAny(User $user): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewProspects);
     }
 
     /**
@@ -20,7 +21,7 @@ class SegmentPolicy
      */
     public function view(User $user, Segment $segment): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewProspects, $segment->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class SegmentPolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canManageAudiences();
+        return $user->hasPermission(Permission::ManageProspects);
     }
 
     /**
@@ -36,7 +37,7 @@ class SegmentPolicy
      */
     public function update(User $user, Segment $segment): bool
     {
-        return $user->role->canManageAudiences();
+        return $user->hasPermission(Permission::ManageProspects, $segment->client_id);
     }
 
     /**
@@ -44,6 +45,6 @@ class SegmentPolicy
      */
     public function delete(User $user, Segment $segment): bool
     {
-        return $user->role->canManageAudiences() && ! $segment->campaigns()->exists();
+        return $user->hasPermission(Permission::ManageProspects, $segment->client_id) && ! $segment->campaigns()->exists();
     }
 }

@@ -18,7 +18,10 @@ it('stores only a hash of the secret and finds the key from its plaintext', func
 it('rejects a plaintext with the right key id but the wrong secret or mode', function () {
     [$apiKey, $plaintext] = issueApiKey();
 
-    expect(ApiKey::findByPlaintext(substr($plaintext, 0, -1).'X'))->toBeNull()
+    // Replace the last character with a different one; a fixed "X" would leave keys that end in X unchanged.
+    $wrongSecret = substr($plaintext, 0, -1).(str_ends_with($plaintext, 'X') ? 'Y' : 'X');
+
+    expect(ApiKey::findByPlaintext($wrongSecret))->toBeNull()
         ->and(ApiKey::findByPlaintext(str_replace('psk_live_', 'psk_test_', $plaintext)))->toBeNull()
         ->and(ApiKey::findByPlaintext('not-a-key'))->toBeNull();
 });

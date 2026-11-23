@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\EmailTemplate;
 use App\Models\User;
 
@@ -12,7 +13,7 @@ class EmailTemplatePolicy
      */
     public function viewAny(User $user): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewCampaigns);
     }
 
     /**
@@ -20,7 +21,7 @@ class EmailTemplatePolicy
      */
     public function view(User $user, EmailTemplate $emailTemplate): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewCampaigns, $emailTemplate->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class EmailTemplatePolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canSendEmail();
+        return $user->hasPermission(Permission::ManageTemplates);
     }
 
     /**
@@ -36,7 +37,7 @@ class EmailTemplatePolicy
      */
     public function update(User $user, EmailTemplate $emailTemplate): bool
     {
-        return $user->role->canSendEmail();
+        return $user->hasPermission(Permission::ManageTemplates, $emailTemplate->client_id);
     }
 
     /**
@@ -44,7 +45,7 @@ class EmailTemplatePolicy
      */
     public function delete(User $user, EmailTemplate $emailTemplate): bool
     {
-        return $user->role->canSendEmail()
+        return $user->hasPermission(Permission::ManageTemplates, $emailTemplate->client_id)
             && ! $emailTemplate->campaigns()->exists()
             && ! $emailTemplate->hasSentEmail();
     }

@@ -4,11 +4,13 @@ namespace App\Filament\Resources\Contacts\Pages;
 
 use App\Actions\Contacts\AddContactsFromText;
 use App\Enums\ConsentStatus;
+use App\Enums\Permission;
 use App\Filament\Exports\ContactExporter;
 use App\Filament\Imports\ContactImporter;
 use App\Filament\Imports\SpreadsheetImportAction;
 use App\Filament\Resources\Contacts\ContactResource;
 use App\Models\ContactList;
+use App\Services\Tenancy\CurrentClient;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\CreateAction;
@@ -35,18 +37,21 @@ class ListContacts extends ListRecords
                 SpreadsheetImportAction::make()
                     ->label('Import CSV or Excel')
                     ->importer(ContactImporter::class)
-                    ->icon(Heroicon::OutlinedArrowUpTray),
-                $this->addFromTextAction(),
+                    ->options(fn (): array => ['client_id' => app(CurrentClient::class)->id()])
+                    ->icon(Heroicon::OutlinedArrowUpTray)
+                    ->authorize(fn (): bool => auth()->user()->hasPermission(Permission::ImportProspects)),
+                $this->addFromTextAction()
+                    ->authorize(fn (): bool => auth()->user()->hasPermission(Permission::ImportProspects)),
                 ExportAction::make()
                     ->label('Export')
                     ->exporter(ContactExporter::class)
-                    ->icon(Heroicon::OutlinedArrowDownTray),
+                    ->icon(Heroicon::OutlinedArrowDownTray)
+                    ->authorize(fn (): bool => auth()->user()->hasPermission(Permission::ExportProspects)),
             ])
                 ->label('Import / export')
                 ->icon(Heroicon::OutlinedArrowsUpDown)
                 ->button()
-                ->color('gray')
-                ->visible(fn (): bool => ContactResource::canCreate()),
+                ->color('gray'),
             CreateAction::make()
                 ->label('Add contact'),
         ];

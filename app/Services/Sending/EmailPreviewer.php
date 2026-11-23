@@ -4,6 +4,7 @@ namespace App\Services\Sending;
 
 use App\Enums\EmailPurpose;
 use App\Models\SenderIdentity;
+use App\Services\Tenancy\CurrentClient;
 
 /**
  * Renders unsent content exactly as recipients will see it, using sample merge tag values.
@@ -34,7 +35,7 @@ class EmailPreviewer
         return view('mail.outgoing', [
             'rendered' => $rendered,
             'senderName' => $senderIdentity?->name ?? config('app.name'),
-            'postalAddress' => config('prosend.marketing.postal_address'),
+            'postalAddress' => app(CurrentClient::class)->get()?->postalAddress() ?? config('prosend.marketing.postal_address'),
         ])->render();
     }
 }

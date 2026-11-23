@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Campaigns\RelationManagers;
 
 use App\Actions\Messages\RetryEmailMessage;
 use App\Enums\MessageStatus;
+use App\Enums\Permission;
 use App\Filament\Exports\EmailMessageExporter;
 use App\Filament\Resources\EmailMessages\EmailMessageResource;
 use App\Models\Campaign;
@@ -22,7 +23,7 @@ class MessagesRelationManager extends RelationManager
 {
     protected static string $relationship = 'messages';
 
-    protected static ?string $title = 'Recipients';
+    protected static ?string $title = 'Emails';
 
     public function isReadOnly(): bool
     {
@@ -43,6 +44,10 @@ class MessagesRelationManager extends RelationManager
                     ->label('Recipient')
                     ->description(fn (EmailMessage $record): ?string => $record->to_name)
                     ->searchable(['to_email', 'to_name']),
+                TextColumn::make('step_number')
+                    ->label('Step')
+                    ->numeric()
+                    ->sortable(),
                 TextColumn::make('status')
                     ->badge()
                     ->tooltip(fn (EmailMessage $record): string => $record->status->getDescription()),
@@ -73,7 +78,8 @@ class MessagesRelationManager extends RelationManager
                 ExportAction::make()
                     ->label('Export results')
                     ->icon(Heroicon::OutlinedArrowDownTray)
-                    ->exporter(EmailMessageExporter::class),
+                    ->exporter(EmailMessageExporter::class)
+                    ->authorize(fn (): bool => auth()->user()->hasPermission(Permission::ExportActivity)),
             ])
             ->recordActions([
                 Action::make('retry')

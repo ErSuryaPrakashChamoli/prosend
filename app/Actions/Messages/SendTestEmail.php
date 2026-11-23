@@ -10,6 +10,7 @@ use App\Jobs\SendEmailMessage;
 use App\Models\EmailMessage;
 use App\Models\SenderIdentity;
 use App\Models\User;
+use App\Services\Tenancy\CurrentClient;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -28,7 +29,7 @@ class SendTestEmail
     public function handle(array $data, User $user): EmailMessage
     {
         $validated = Validator::make($data, [
-            'sender_identity_id' => ['required', 'integer', Rule::exists(SenderIdentity::class, 'id')],
+            'sender_identity_id' => ['required', 'integer', Rule::exists(SenderIdentity::class, 'id')->where('client_id', app(CurrentClient::class)->id())],
             'subject' => ['required', 'string', 'max:240'],
             'body' => ['required', 'string', 'max:500000'],
             'text_body' => ['nullable', 'string', 'max:500000'],

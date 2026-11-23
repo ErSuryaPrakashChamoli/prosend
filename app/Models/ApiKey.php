@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\ApiKeyMode;
 use App\Enums\ApiScope;
+use App\Models\Concerns\BelongsToClient;
 use Database\Factories\ApiKeyFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
@@ -25,7 +26,7 @@ use Symfony\Component\HttpFoundation\IpUtils;
 class ApiKey extends Model
 {
     /** @use HasFactory<ApiKeyFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     public const KEY_PATTERN = '/^psk_(live|test)_([A-Za-z0-9]{12})_([A-Za-z0-9]{40})$/';
 
@@ -199,10 +200,16 @@ class ApiKey extends Model
      */
     public function hasScope(ApiScope $scope): bool
     {
+        if ($scope->changesData() && $this->isTest()) {
+            return false;
+        }
+
         $scopes = $this->scopes ?? [];
 
         return in_array($scope->value, $scopes, true)
-            || ($scope === ApiScope::EmailsRead && in_array(ApiScope::EmailsReadAll->value, $scopes, true));
+            || ($scope === ApiScope::EmailsRead && in_array(ApiScope::EmailsReadAll->value, $scopes, true))
+            || ($scope === ApiScope::ProspectsRead && in_array(ApiScope::ProspectsWrite->value, $scopes, true))
+            || ($scope === ApiScope::CampaignsRead && in_array(ApiScope::CampaignsWrite->value, $scopes, true));
     }
 
     public function allowsSender(SenderIdentity $senderIdentity): bool

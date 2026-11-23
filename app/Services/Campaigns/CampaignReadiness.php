@@ -55,8 +55,8 @@ class CampaignReadiness
             $warnings[] = 'The sender identity is not verified. This is only allowed because sender verification is not required in this environment.';
         }
 
-        if ($isMarketing && blank(config('prosend.marketing.postal_address'))) {
-            $warnings[] = 'No business postal address is set (PROSEND_POSTAL_ADDRESS), so the email footer will not include one. Marketing email should; in the US, CAN-SPAM requires it.';
+        if ($isMarketing && blank($campaign->client?->postalAddress())) {
+            $warnings[] = 'No business postal address is set for this client (Client settings, or PROSEND_POSTAL_ADDRESS for all clients), so the email footer will not include one. Marketing email should; in the US, CAN-SPAM requires it.';
         }
 
         if ($campaign->senderIdentity !== null) {
@@ -101,6 +101,34 @@ class CampaignReadiness
 
         if (blank(strip_tags((string) $campaign->body))) {
             $issues[] = 'Add the email content.';
+        }
+
+        foreach ($campaign->steps as $step) {
+            if (blank(strip_tags((string) $step->body))) {
+                $issues[] = "Add content to follow-up step {$step->stepNumber()}.";
+            }
+        }
+
+        foreach ($campaign->variants()->with('step')->get() as $variant) {
+            $where = $variant->step === null ? 'the first email' : "follow-up step {$variant->step->stepNumber()}";
+
+            if (blank(strip_tags((string) $variant->body))) {
+                $issues[] = "Add content to version {$variant->label()} of {$where}.";
+            }
+        }
+
+        foreach ($campaign->variants()->where('is_active', true)->get()->groupBy('campaign_step_id') as $variants) {
+            if ($variants->sum('weight') > 99) {
+                $issues[] = 'The A/B versions of one email take more than 99% of prospects. Leave at least 1% for version A.';
+            }
+        }
+
+        if ($campaign->send_days !== null && $campaign->send_days === []) {
+            $issues[] = 'Choose at least one sending day.';
+        }
+
+        if (filled($campaign->send_window_start) && filled($campaign->send_window_end) && $campaign->send_window_start >= $campaign->send_window_end) {
+            $issues[] = 'The sending window must end after it starts.';
         }
 
         $senderIdentity = $campaign->senderIdentity;

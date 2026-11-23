@@ -6,6 +6,9 @@ use App\Enums\AudienceType;
 use App\Enums\ConsentStatus;
 use App\Enums\ContactStage;
 use App\Enums\EmailPurpose;
+use App\Enums\OutreachEvent;
+use App\Enums\Permission;
+use App\Enums\SequenceStatus;
 use App\Filament\Pages\ComposeEmail;
 use App\Filament\Resources\Campaigns\CampaignResource;
 use App\Models\Campaign;
@@ -13,6 +16,8 @@ use App\Models\Contact;
 use App\Models\ContactList;
 use App\Models\Segment;
 use App\Models\User;
+use App\Services\Automation\OutreachEvents;
+use App\Services\Campaigns\SequenceProgress;
 use Filament\Actions\Action;
 use Filament\Actions\BulkAction;
 use Filament\Actions\BulkActionGroup;
@@ -113,7 +118,7 @@ class ContactsTable
                     ->options(ContactStage::class)
                     ->multiple(),
                 SelectFilter::make('owner')
-                    ->relationship('owner', 'name')
+                    ->relationship('owner', 'name', fn (Builder $query) => $query->memberOf())
                     ->preload(),
                 SelectFilter::make('industry')
                     ->options(fn (): array => Contact::query()
@@ -226,7 +231,7 @@ class ContactsTable
         return BulkAction::make('addToList')
             ->label('Add to list')
             ->icon(Heroicon::OutlinedQueueList)
-            ->visible(fn (): bool => auth()->user()->role->canManageAudiences())
+            ->visible(fn (): bool => auth()->user()->hasPermission(Permission::ManageProspects))
             ->schema([
                 Select::make('contact_list_id')
                     ->label('List')
@@ -234,7 +239,7 @@ class ContactsTable
                     ->searchable()
                     ->required()
                     ->createOptionForm([
-                        TextInput::make('name')->required()->maxLength(255)->unique('contact_lists', 'name'),
+                        TextInput::make('name')->required()->maxLength(255)->scopedUnique(ContactList::class, 'name'),
                     ])
                     ->createOptionUsing(fn (array $data): int => ContactList::query()->create($data)->getKey()),
             ])
@@ -255,7 +260,7 @@ class ContactsTable
         return BulkAction::make('setStage')
             ->label('Set stage')
             ->icon(Heroicon::OutlinedFunnel)
-            ->visible(fn (): bool => auth()->user()->role->canManageAudiences())
+            ->visible(fn (): bool => auth()->user()->hasPermission(Permission::ManageProspects))
             ->schema([
                 Select::make('stage')
                     ->options(ContactStage::class)
@@ -264,6 +269,18 @@ class ContactsTable
             ->action(function (Collection $records, array $data): void {
                 $stage = $data['stage'] instanceof ContactStage ? $data['stage'] : ContactStage::from($data['stage']);
                 Contact::query()->whereKey($records->modelKeys())->update(['stage' => $stage]);
+
+                // A bulk update skips model events: sequences are ended, and rules and webhooks told, here instead.
+                $records->filter(fn (Contact $contact): bool => $contact->stage !== $stage)->each(function (Contact $contact) use ($stage): void {
+                    if ($stage->meansReplied()) {
+                        app(SequenceProgress::class)->stopForContact($contact, SequenceStatus::Replied, 'Replied');
+                    }
+
+                    app(OutreachEvents::class)->dispatch(OutreachEvent::ProspectStageChanged, $contact->client_id, $contact->forceFill(['stage' => $stage]), [
+                        'previous_stage' => $contact->getOriginal('stage')?->value,
+                        'stage' => $stage->value,
+                    ], "stage:{$contact->getKey()}:{$stage->value}:".now()->getTimestamp());
+                });
 
                 Notification::make()
                     ->success()
@@ -278,16 +295,16 @@ class ContactsTable
         return BulkAction::make('assignOwner')
             ->label('Assign owner')
             ->icon(Heroicon::OutlinedUserCircle)
-            ->visible(fn (): bool => auth()->user()->role->canManageAudiences())
+            ->visible(fn (): bool => auth()->user()->hasPermission(Permission::ManageProspects))
             ->schema([
                 Select::make('owner_id')
                     ->label('Owner')
-                    ->options(fn (): array => User::query()->orderBy('name')->pluck('name', 'id')->all())
+                    ->options(fn (): array => User::query()->memberOf()->orderBy('name')->pluck('name', 'id')->all())
                     ->searchable()
                     ->placeholder('Unassigned'),
             ])
             ->action(function (Collection $records, array $data): void {
-                $owner = filled($data['owner_id'] ?? null) ? User::query()->findOrFail($data['owner_id']) : null;
+                $owner = filled($data['owner_id'] ?? null) ? User::query()->memberOf()->findOrFail($data['owner_id']) : null;
                 Contact::query()->whereKey($records->modelKeys())->update(['owner_id' => $owner?->getKey()]);
 
                 Notification::make()
@@ -303,7 +320,7 @@ class ContactsTable
         return BulkAction::make('removeFromList')
             ->label('Remove from list')
             ->icon(Heroicon::OutlinedMinusCircle)
-            ->visible(fn (): bool => auth()->user()->role->canManageAudiences())
+            ->visible(fn (): bool => auth()->user()->hasPermission(Permission::ManageProspects))
             ->schema([
                 Select::make('contact_list_id')
                     ->label('List')

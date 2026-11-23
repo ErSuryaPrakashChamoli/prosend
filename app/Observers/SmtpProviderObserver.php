@@ -13,7 +13,11 @@ class SmtpProviderObserver
     /**
      * Fields that change during normal operation and are not configuration changes.
      */
-    private const OPERATIONAL_FIELDS = ['updated_at', 'health_status', 'last_checked_at', 'last_connected_at', 'last_error'];
+    /**
+     * Fields that change in normal operation, not by anyone's decision. OAuth tokens are refreshed about every hour;
+     * connecting a mailbox is audited on its own ("mailbox.connected").
+     */
+    private const OPERATIONAL_FIELDS = ['updated_at', 'health_status', 'last_checked_at', 'last_connected_at', 'last_error', 'oauth_access_token', 'oauth_refresh_token', 'oauth_expires_at'];
 
     private const SECRET_FIELDS = ['password', 'api_key', 'webhook_token_hash'];
 

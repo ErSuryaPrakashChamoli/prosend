@@ -25,12 +25,12 @@ enum CampaignStatus: string implements HasColor, HasLabel
             self::PendingApproval => 'Pending approval',
             self::Scheduled => 'Scheduled',
             self::Queued => 'Queued',
-            self::Sending => 'Sending',
+            self::Sending => 'Active',
             self::Paused => 'Paused',
             self::Completed => 'Completed',
             self::PartiallyFailed => 'Partially failed',
             self::Failed => 'Failed',
-            self::Cancelled => 'Cancelled',
+            self::Cancelled => 'Stopped',
         };
     }
 

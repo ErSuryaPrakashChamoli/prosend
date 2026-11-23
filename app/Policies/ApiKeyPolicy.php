@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\Permission;
 use App\Models\ApiKey;
 use App\Models\User;
 
@@ -12,7 +13,7 @@ class ApiKeyPolicy
      */
     public function viewAny(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageIntegrations);
     }
 
     /**
@@ -20,7 +21,7 @@ class ApiKeyPolicy
      */
     public function view(User $user, ApiKey $apiKey): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageIntegrations, $apiKey->client_id);
     }
 
     /**
@@ -28,7 +29,7 @@ class ApiKeyPolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canManageInfrastructure();
+        return $user->hasPermission(Permission::ManageIntegrations);
     }
 
     /**
@@ -36,7 +37,7 @@ class ApiKeyPolicy
      */
     public function update(User $user, ApiKey $apiKey): bool
     {
-        return $user->role->canManageInfrastructure() && ! $apiKey->isRevoked();
+        return $user->hasPermission(Permission::ManageIntegrations, $apiKey->client_id) && ! $apiKey->isRevoked();
     }
 
     /**

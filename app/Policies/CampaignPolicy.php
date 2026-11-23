@@ -3,6 +3,7 @@
 namespace App\Policies;
 
 use App\Enums\CampaignStatus;
+use App\Enums\Permission;
 use App\Models\Campaign;
 use App\Models\User;
 
@@ -13,7 +14,7 @@ class CampaignPolicy
      */
     public function viewAny(User $user): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewCampaigns);
     }
 
     /**
@@ -21,7 +22,7 @@ class CampaignPolicy
      */
     public function view(User $user, Campaign $campaign): bool
     {
-        return true;
+        return $user->hasPermission(Permission::ViewCampaigns, $campaign->client_id);
     }
 
     /**
@@ -29,7 +30,7 @@ class CampaignPolicy
      */
     public function create(User $user): bool
     {
-        return $user->role->canSendEmail();
+        return $user->hasPermission(Permission::ManageCampaigns);
     }
 
     /**
@@ -37,7 +38,7 @@ class CampaignPolicy
      */
     public function update(User $user, Campaign $campaign): bool
     {
-        return $user->role->canSendEmail() && $campaign->status->canBeEdited() && $campaign->started_at === null;
+        return $user->hasPermission(Permission::ManageCampaigns, $campaign->client_id) && $campaign->status->canBeEdited() && $campaign->started_at === null;
     }
 
     /**
@@ -45,7 +46,7 @@ class CampaignPolicy
      */
     public function delete(User $user, Campaign $campaign): bool
     {
-        return $user->role->canSendEmail() && $campaign->status->canBeEdited() && $campaign->started_at === null;
+        return $user->hasPermission(Permission::ManageCampaigns, $campaign->client_id) && $campaign->status->canBeEdited() && $campaign->started_at === null;
     }
 
     /**
@@ -53,24 +54,24 @@ class CampaignPolicy
      */
     public function operate(User $user, Campaign $campaign): bool
     {
-        return $user->role->canSendEmail();
+        return $user->hasPermission(Permission::OperateCampaigns, $campaign->client_id);
     }
 
     /**
-     * Anyone who can send email may submit a draft for approval.
+     * Anyone who manages campaigns may submit a draft for approval.
      */
     public function submit(User $user, Campaign $campaign): bool
     {
-        return $user->role->canSendEmail() && $campaign->status === CampaignStatus::Draft;
+        return $user->hasPermission(Permission::ManageCampaigns, $campaign->client_id) && $campaign->status === CampaignStatus::Draft;
     }
 
     /**
-     * Administrators approve campaigns. When a second approver is required, nobody approves a campaign they created,
+     * People with the approve permission approve campaigns. When a second approver is required, nobody approves a campaign they created,
      * last edited, or submitted.
      */
     public function approve(User $user, Campaign $campaign): bool
     {
-        if (! $user->role->canApproveCampaigns() || $campaign->status !== CampaignStatus::PendingApproval) {
+        if (! $user->hasPermission(Permission::ApproveCampaigns, $campaign->client_id) || $campaign->status !== CampaignStatus::PendingApproval) {
             return false;
         }
 
@@ -87,7 +88,16 @@ class CampaignPolicy
     public function returnToDraft(User $user, Campaign $campaign): bool
     {
         return $campaign->status === CampaignStatus::PendingApproval
-            && $user->role->canSendEmail()
-            && ($user->role->canApproveCampaigns() || $campaign->submitted_by === $user->getKey());
+            && ($user->hasPermission(Permission::ApproveCampaigns, $campaign->client_id)
+                || ($user->hasPermission(Permission::ManageCampaigns, $campaign->client_id) && $campaign->submitted_by === $user->getKey()));
+    }
+
+    /**
+     * Drafts and finished campaigns can be archived and restored by people who manage campaigns.
+     */
+    public function archive(User $user, Campaign $campaign): bool
+    {
+        return $user->hasPermission(Permission::ManageCampaigns, $campaign->client_id)
+            && ($campaign->isArchived() || $campaign->canBeArchived());
     }
 }

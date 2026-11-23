@@ -3,7 +3,10 @@
 use App\Enums\ApiKeyMode;
 use App\Enums\ApiScope;
 use App\Models\ApiKey;
+use App\Models\Client;
 use App\Models\SenderIdentity;
+use App\Services\Tenancy\CurrentClient;
+use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use OpenSpout\Common\Entity\Row;
 use OpenSpout\Common\Entity\Style\Style;
@@ -23,6 +26,7 @@ use Tests\TestCase;
 
 pest()->extend(TestCase::class)
     ->use(LazilyRefreshDatabase::class)
+    ->beforeEach(fn () => useClient(Client::query()->where('slug', 'default')->firstOrFail()))
     ->in('Feature');
 
 /*
@@ -105,4 +109,37 @@ function xlsxWorkbook(array $firstSheet, array $secondSheet = []): string
     unlink($base);
 
     return $bytes;
+}
+
+/**
+ * Work as the given client from now on: model queries are scoped to it, new records join it, and panel pages and URLs
+ * use it as the tenant. Every feature test starts in the Default client created by the migrations.
+ */
+function useClient(Client $client): Client
+{
+    app(CurrentClient::class)->set($client);
+    Filament::setCurrentPanel(Filament::getPanel('admin'));
+    Filament::setTenant($client, isQuiet: true);
+
+    return $client;
+}
+
+/**
+ * Run the callback as another client, then switch back.
+ *
+ * @template TResult
+ *
+ * @param  callable(): TResult  $callback
+ * @return TResult
+ */
+function asClient(Client $client, callable $callback): mixed
+{
+    $previous = app(CurrentClient::class)->get();
+    useClient($client);
+
+    try {
+        return $callback();
+    } finally {
+        useClient($previous);
+    }
 }

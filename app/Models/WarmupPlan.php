@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\WarmupRecommendation;
 use App\Enums\WarmupStatus;
+use App\Models\Concerns\BelongsToClient;
 use Database\Factories\WarmupPlanFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -15,7 +16,7 @@ use Illuminate\Support\Str;
 class WarmupPlan extends Model
 {
     /** @use HasFactory<WarmupPlanFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     /**
      * @var array<string, mixed>
@@ -52,6 +53,14 @@ class WarmupPlan extends Model
             'last_recommendation' => WarmupRecommendation::class,
             'approved_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function clientConsistentRelations(): array
+    {
+        return ['smtpProvider', 'sendingDomain'];
     }
 
     /**

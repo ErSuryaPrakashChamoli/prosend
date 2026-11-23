@@ -42,7 +42,7 @@ class SuppressionResource extends Resource
                     ->email()
                     ->required()
                     ->maxLength(255)
-                    ->unique(),
+                    ->scopedUnique(),
                 Select::make('reason')
                     ->options(SuppressionReason::class)
                     ->default(SuppressionReason::Manual)

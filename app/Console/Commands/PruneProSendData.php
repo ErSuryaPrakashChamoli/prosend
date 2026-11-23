@@ -6,8 +6,10 @@ use App\Enums\MessageStatus;
 use App\Models\ApiKeyDailyUsage;
 use App\Models\ApiRequestLog;
 use App\Models\AuditLog;
+use App\Models\AutomationRun;
 use App\Models\EmailMessage;
 use App\Models\IdempotencyKey;
+use App\Models\WebhookDelivery;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -30,6 +32,8 @@ class PruneProSendData extends Command
         $this->report('API usage days', $this->deleteInBatches(ApiKeyDailyUsage::query()->where('date', '<', now()->subMonths($retention['api_usage_months'])->toDateString())));
         $this->report('Email bodies and attachments', $this->clearBodies(now()->subDays($retention['message_bodies_days'])));
         $this->report('Email records and their events', $this->deleteInBatches(EmailMessage::query()->where('created_at', '<', now()->subMonths($retention['messages_months']))->whereNotIn('status', MessageStatus::inFlight())));
+        $this->report('Automation runs', $this->deleteInBatches(AutomationRun::acrossClients()->where('created_at', '<', now()->subDays($retention['automation_runs_days']))));
+        $this->report('Webhook deliveries', $this->deleteInBatches(WebhookDelivery::acrossClients()->where('created_at', '<', now()->subDays($retention['webhook_deliveries_days']))->where('status', '!=', WebhookDelivery::PENDING)));
         $this->report('Audit log entries', $this->deleteInBatches(AuditLog::query()->where('created_at', '<', now()->subMonths($retention['audit_logs_months']))));
 
         return self::SUCCESS;

@@ -14,6 +14,7 @@ use App\Models\SenderIdentity;
 use App\Models\User;
 use App\Services\Sending\RecipientEligibility;
 use App\Services\Sending\TemplateVariables;
+use App\Services\Tenancy\CurrentClient;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -110,9 +111,9 @@ class QueueComposedEmails
         }
 
         $validator = Validator::make($data, [
-            'sender_identity_id' => ['required', 'integer', Rule::exists(SenderIdentity::class, 'id')],
+            'sender_identity_id' => ['required', 'integer', Rule::exists(SenderIdentity::class, 'id')->where('client_id', app(CurrentClient::class)->id())],
             'purpose' => ['required', Rule::enum(EmailPurpose::class)],
-            'email_template_id' => ['nullable', 'integer', Rule::exists(EmailTemplate::class, 'id')],
+            'email_template_id' => ['nullable', 'integer', Rule::exists(EmailTemplate::class, 'id')->where('client_id', app(CurrentClient::class)->id())],
             'to' => ['required', 'array', 'min:1', 'max:'.config('prosend.compose.max_recipients')],
             'to.*' => ['email:rfc', 'distinct'],
             'cc' => ['array', 'max:10'],

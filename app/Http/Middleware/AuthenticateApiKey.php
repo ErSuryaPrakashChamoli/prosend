@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Exceptions\ApiException;
 use App\Models\ApiKey;
+use App\Services\Tenancy\CurrentClient;
 use Closure;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Http\Request;
@@ -46,8 +47,15 @@ class AuthenticateApiKey implements AuthenticatesRequests
             throw ApiException::forbidden('ip_not_allowed', 'This API key cannot be used from this IP address.');
         }
 
+        if (! $apiKey->client->is_active) {
+            throw ApiException::forbidden('client_inactive', 'The client this API key belongs to is deactivated.');
+        }
+
         $apiKey->touchLastUsed($request->ip());
         $request->attributes->set('api_key', $apiKey);
+
+        // Everything the request reads or writes is limited to the key's client, including route model binding.
+        app(CurrentClient::class)->set($apiKey->client);
 
         return $next($request);
     }

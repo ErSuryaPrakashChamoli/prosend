@@ -12,8 +12,19 @@ info:
     Every error uses one envelope: `{"error": {"code", "message", "fields"?, "request_id"}}`. Codes are stable;
     messages may change. Every response carries `X-Request-Id`.
 
-    A `202` from `POST /emails` means queued. Read the status, or subscribe to webhooks (M2), to learn what happened.
+    A `202` from `POST /emails` means queued. Read the status, or subscribe to webhooks, to learn what happened.
     "accepted" means the provider took the message; only "delivered" confirms delivery.
+
+    Every key belongs to one client and only ever sees that client's data. Prospects, campaigns and conversations
+    need their own scopes (`prospects:read`, `prospects:write`, `campaigns:read`, `campaigns:write`,
+    `conversations:read`); a write scope includes the matching read scope. Lists are cursor-paginated: pass the
+    `next_cursor` from `meta` / `links` as `cursor`.
+
+    Outgoing webhooks (configured under Infrastructure > Webhooks) are signed the Standard Webhooks way: verify
+    `webhook-signature` (`v1,` + base64 HMAC-SHA256 of `{webhook-id}.{webhook-timestamp}.{body}` with the base64 part
+    of your `whsec_` secret). Event types: prospect.created, prospect.imported, prospect.stage_changed,
+    prospect.unsubscribed, campaign.started, campaign.completed, email.sent, email.opened, email.clicked,
+    email.replied, email.bounced. Use `webhook-id` to ignore a delivery you already processed.
 servers:
   - url: "{baseUrl}/api/v1"
     variables:
@@ -162,6 +173,132 @@ paths:
                   meta: { $ref: "#/components/schemas/Meta" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /prospects:
+    get:
+      summary: List prospects
+      operationId: listProspects
+      description: Requires `prospects:read`.
+      parameters:
+        - { name: email, in: query, schema: { type: string, format: email } }
+        - { name: stage, in: query, schema: { $ref: "#/components/schemas/ProspectStage" } }
+        - { name: tag, in: query, schema: { type: string } }
+        - { name: list_id, in: query, schema: { type: integer } }
+        - { name: updated_after, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Prospects, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Prospect" } }
+                  meta: { $ref: "#/components/schemas/Meta" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    put:
+      summary: Create or update a prospect by email
+      operationId: upsertProspect
+      description: |
+        Requires `prospects:write`. Only the fields sent change; tags and custom attributes are added to what the
+        prospect has. Granting consent needs `consent_source`. It never removes an unsubscribe or a suppression.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpsertProspectRequest" }
+      responses:
+        "200": { description: An existing prospect was updated. }
+        "201": { description: The prospect was created. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /prospects/{id}:
+    get:
+      summary: Read a prospect
+      operationId: getProspect
+      description: Requires `prospects:read`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The prospect. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /prospects/{id}/unsubscribe:
+    post:
+      summary: Record an unsubscribe
+      operationId: unsubscribeProspect
+      description: Requires `prospects:write`. Adds the address to the client's suppression list. Cannot be undone through the API.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The prospect, now unsubscribed. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /campaigns:
+    get:
+      summary: List campaigns
+      operationId: listCampaigns
+      description: Requires `campaigns:read`.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [draft, pending_approval, scheduled, queued, sending, paused, completed, partially_failed, failed, cancelled] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Campaigns, newest first. }
+  /campaigns/{id}:
+    get:
+      summary: Read a campaign and its prospects' progress
+      operationId: getCampaign
+      description: Requires `campaigns:read`. `prospects` counts prospects by sequence status (active, completed, replied, bounced, unsubscribed, failed, stopped).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The campaign. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /campaigns/{id}/prospects:
+    post:
+      summary: Add prospects to a draft campaign
+      operationId: addCampaignProspects
+      description: |
+        Requires `campaigns:write`. Only for a draft campaign sent to selected prospects; submitting, approving and
+        sending stay in the panel. Unknown ids and emails are ignored; `meta.added` says how many were found.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prospect_ids: { type: array, maxItems: 1000, items: { type: integer } }
+                emails: { type: array, maxItems: 1000, items: { type: string, format: email } }
+      responses:
+        "200": { description: The campaign. }
+        "422": { description: "`campaign_not_editable`: not a draft sent to selected prospects." }
+  /conversations:
+    get:
+      summary: List inbox conversations
+      operationId: listConversations
+      description: Requires `conversations:read`.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [new, open, interested, not_interested, follow_up, converted, closed] } }
+        - { name: updated_after, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Conversations, newest first. }
+  /conversations/{id}:
+    get:
+      summary: Read a conversation with its messages
+      operationId: getConversation
+      description: Requires `conversations:read`. Messages carry their plain text; attachments are listed by name and size.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The conversation. }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     apiKey:
@@ -180,6 +317,56 @@ components:
         with the same key. After a 5xx, retry the same request; anything it already created is returned.
       schema: { type: string, minLength: 1, maxLength: 255 }
   schemas:
+    ProspectStage:
+      type: string
+      enum: [new, active, contacted, replied, interested, converted]
+    Prospect:
+      type: object
+      properties:
+        id: { type: integer }
+        object: { type: string, const: prospect }
+        email: { type: string, format: email }
+        first_name: { type: [string, "null"] }
+        last_name: { type: [string, "null"] }
+        company: { type: [string, "null"] }
+        job_title: { type: [string, "null"] }
+        industry: { type: [string, "null"] }
+        website: { type: [string, "null"] }
+        phone: { type: [string, "null"] }
+        timezone: { type: [string, "null"] }
+        stage: { $ref: "#/components/schemas/ProspectStage" }
+        tags: { type: array, items: { type: string } }
+        custom_attributes: { type: object }
+        consent:
+          type: object
+          properties:
+            status: { type: string, enum: [granted, unknown, revoked] }
+            source: { type: [string, "null"] }
+            given_at: { type: [string, "null"], format: date-time }
+        unsubscribed_at: { type: [string, "null"], format: date-time }
+        last_contacted_at: { type: [string, "null"], format: date-time }
+        last_replied_at: { type: [string, "null"], format: date-time }
+        list_ids: { type: array, items: { type: integer } }
+    UpsertProspectRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+        first_name: { type: string }
+        last_name: { type: string }
+        company: { type: string }
+        job_title: { type: string }
+        industry: { type: string }
+        website: { type: string, format: uri }
+        phone: { type: string }
+        timezone: { type: string, description: An IANA time zone, such as Asia/Kolkata. }
+        notes: { type: string }
+        stage: { $ref: "#/components/schemas/ProspectStage" }
+        tags: { type: array, maxItems: 50, items: { type: string } }
+        custom_attributes: { type: object, description: "Keys: lower-case letters, digits and underscores." }
+        consent_status: { type: string, enum: [granted, unknown, revoked] }
+        consent_source: { type: string, description: Required when consent_status is granted. }
+        list_ids: { type: array, items: { type: integer } }
     Meta:
       type: object
       properties:
@@ -324,7 +511,7 @@ components:
         name: { type: string }
         key: { type: string, description: Masked, for example psk_live_Ab12Cd34Ef56_…wxyz }
         mode: { type: string, enum: [live, test] }
-        scopes: { type: array, items: { type: string, enum: ["emails:send", "emails:send_marketing", "emails:read", "emails:read_all"] } }
+        scopes: { type: array, items: { type: string, enum: ["emails:send", "emails:send_marketing", "emails:read", "emails:read_all", "prospects:read", "prospects:write", "campaigns:read", "campaigns:write", "conversations:read"] }, description: "Test keys never get prospects:write or campaigns:write, because those changes are real." }
         allowed_senders: { type: array, items: { type: string, format: email } }
         rate_limit_per_minute: { type: integer }
         daily_send_limit: { type: [integer, "null"] }

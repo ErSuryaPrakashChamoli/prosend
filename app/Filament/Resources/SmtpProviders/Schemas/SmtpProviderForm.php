@@ -58,6 +58,7 @@ class SmtpProviderForm
                                 }
                             }),
                         TextInput::make('host')
+                            ->hidden(fn (Get $get): bool => static::type($get('type'))?->usesOAuth() === true)
                             ->label('SMTP host')
                             ->default(ProviderType::Brevo->defaultHost())
                             ->required()
@@ -81,6 +82,7 @@ class SmtpProviderForm
                                 default => null,
                             }),
                         TextInput::make('port')
+                            ->hidden(fn (Get $get): bool => static::type($get('type'))?->usesOAuth() === true)
                             ->numeric()
                             ->integer()
                             ->minValue(1)
@@ -88,10 +90,12 @@ class SmtpProviderForm
                             ->default(587)
                             ->required(),
                         Select::make('encryption')
+                            ->hidden(fn (Get $get): bool => static::type($get('type'))?->usesOAuth() === true)
                             ->options(SmtpEncryption::class)
                             ->default(SmtpEncryption::StartTls)
                             ->required(),
                         TextInput::make('username')
+                            ->hidden(fn (Get $get): bool => static::type($get('type'))?->usesOAuth() === true)
                             ->label('SMTP login')
                             ->required(fn (Get $get): bool => in_array(static::type($get('type')), [ProviderType::Mailtrap, ProviderType::MailtrapSandbox], true))
                             ->maxLength(255)
@@ -102,6 +106,7 @@ class SmtpProviderForm
                                 default => null,
                             }),
                         TextInput::make('password')
+                            ->hidden(fn (Get $get): bool => static::type($get('type'))?->usesOAuth() === true)
                             ->label(fn (Get $get): string => match (static::type($get('type'))) {
                                 ProviderType::Mailtrap => 'Mailtrap API token',
                                 ProviderType::MailtrapSandbox => 'Sandbox SMTP password',
@@ -123,6 +128,7 @@ class SmtpProviderForm
                                 .(static::type($get('type')) === ProviderType::Mailtrap ? ' Find it in Mailtrap under Sending Setup > API/SMTP (choose the domain and stream, then SMTP), or create one under Settings > API Tokens.' : ''))
                             ->columnSpanFull(),
                         TextInput::make('api_key')
+                            ->hidden(fn (Get $get): bool => static::type($get('type'))?->usesOAuth() === true)
                             ->label('Brevo API key (optional)')
                             ->password()
                             ->autocomplete('new-password')
@@ -186,7 +192,7 @@ class SmtpProviderForm
     {
         $types = $record !== null
             ? $record->type->compatibleTypes()
-            : array_filter(ProviderType::cases(), fn (ProviderType $type): bool => ! $type->isSandbox() || config('prosend.providers.allow_sandbox'));
+            : array_filter(ProviderType::configurable(), fn (ProviderType $type): bool => ! $type->isSandbox() || config('prosend.providers.allow_sandbox'));
 
         return collect($types)->mapWithKeys(fn (ProviderType $type): array => [$type->value => $type->getLabel()])->all();
     }

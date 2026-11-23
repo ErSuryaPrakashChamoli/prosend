@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\SegmentMatch;
+use App\Models\Concerns\BelongsToClient;
 use App\Services\Segments\SegmentQuery;
 use Database\Factories\SegmentFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -16,7 +17,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Segment extends Model
 {
     /** @use HasFactory<SegmentFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     /**
      * @var array<string, mixed>

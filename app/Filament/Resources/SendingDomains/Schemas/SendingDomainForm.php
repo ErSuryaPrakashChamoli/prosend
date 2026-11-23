@@ -24,7 +24,7 @@ class SendingDomainForm
                             ->placeholder('example.com')
                             ->regex('/^@?([a-z0-9-]+\.)+[a-z]{2,}$/i')
                             ->validationMessages(['regex' => 'Enter a domain such as example.com, without https:// or a path.'])
-                            ->unique(ignoreRecord: true)
+                            ->scopedUnique(ignoreRecord: true)
                             ->helperText('The part after @ in your From address. Add each domain you send from.'),
                         Select::make('smtp_provider_id')
                             ->label('Sends through')

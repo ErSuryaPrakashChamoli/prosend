@@ -40,12 +40,12 @@ class SmtpHostPolicy
      * Why ProSend may not connect to the host, checked when a provider is saved. A host that does not
      * resolve is not refused here; testing the connection reports it.
      */
-    public function problemWith(string $host): ?string
+    public function problemWith(string $host, ?bool $allowPrivate = null): ?string
     {
         $host = $this->normalize($host);
 
         foreach ($this->addresses($host) as $address) {
-            if (($refusal = $this->refusal($host, $address)) !== null) {
+            if (($refusal = $this->refusal($host, $address, $allowPrivate)) !== null) {
                 return $refusal;
             }
         }
@@ -59,7 +59,7 @@ class SmtpHostPolicy
      *
      * @throws TransportException
      */
-    public function addressFor(string $host): string
+    public function addressFor(string $host, ?bool $allowPrivate = null): string
     {
         $host = $this->normalize($host);
         $addresses = $this->addresses($host);
@@ -69,7 +69,7 @@ class SmtpHostPolicy
         }
 
         foreach ($addresses as $address) {
-            if (($refusal = $this->refusal($host, $address)) !== null) {
+            if (($refusal = $this->refusal($host, $address, $allowPrivate)) !== null) {
                 throw new BlockedSmtpHostException($refusal);
             }
         }
@@ -97,7 +97,10 @@ class SmtpHostPolicy
         return filter_var($host, FILTER_VALIDATE_IP) !== false ? [$host] : $this->dns->addresses($host);
     }
 
-    private function refusal(string $host, string $address): ?string
+    /**
+     * $allowPrivate overrides the SMTP setting, for callers with their own (webhooks).
+     */
+    private function refusal(string $host, string $address, ?bool $allowPrivate = null): ?string
     {
         $ip = $this->embeddedIpv4($address) ?? $address;
         $subject = $host === $address ? $address : "{$host} ({$address})";
@@ -109,7 +112,7 @@ class SmtpHostPolicy
             return "{$subject} is a link-local, cloud metadata, multicast or reserved address. ProSend never connects to these.";
         }
 
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE) !== false || config('prosend.providers.allow_private_hosts')) {
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE) !== false || ($allowPrivate ?? config('prosend.providers.allow_private_hosts'))) {
             return null;
         }
 

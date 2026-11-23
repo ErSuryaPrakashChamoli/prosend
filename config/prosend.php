@@ -166,12 +166,35 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Automation and Webhooks
+    |--------------------------------------------------------------------------
+    |
+    | Automation emails are capped per prospect and per rule each day. Rule runs and webhook deliveries can use their
+    | own queue (run a worker for it too, e.g. --queue=default,automation). Webhooks never go to private or loopback
+    | addresses unless allowed here, separately from SMTP hosts.
+    |
+    */
+
+    'automation' => [
+        'queue' => env('PROSEND_AUTOMATION_QUEUE', env('PROSEND_QUEUE', 'default')),
+        'max_emails_per_prospect_per_day' => (int) env('PROSEND_AUTOMATION_MAX_EMAILS_PER_PROSPECT', 3),
+        'max_emails_per_rule_per_day' => (int) env('PROSEND_AUTOMATION_MAX_EMAILS_PER_RULE', 200),
+    ],
+
+    'webhooks' => [
+        'allow_private_hosts' => (bool) env('PROSEND_WEBHOOKS_ALLOW_PRIVATE_HOSTS', false),
+    ],
+
     'retention' => [
         'message_bodies_days' => (int) env('PROSEND_RETAIN_BODIES_DAYS', 90),
         'messages_months' => (int) env('PROSEND_RETAIN_MESSAGES_MONTHS', 13),
         'api_request_logs_days' => (int) env('PROSEND_RETAIN_API_LOGS_DAYS', 30),
         'api_usage_months' => (int) env('PROSEND_RETAIN_API_USAGE_MONTHS', 13),
         'audit_logs_months' => (int) env('PROSEND_RETAIN_AUDIT_MONTHS', 24),
+        'automation_runs_days' => (int) env('PROSEND_RETAIN_AUTOMATION_RUNS_DAYS', 90),
+        'webhook_deliveries_days' => (int) env('PROSEND_RETAIN_WEBHOOK_DELIVERIES_DAYS', 30),
     ],
 
 ];

@@ -22,6 +22,8 @@ class ContactExporter extends Exporter
             ExportColumn::make('job_title'),
             ExportColumn::make('industry'),
             ExportColumn::make('website'),
+            ExportColumn::make('timezone')
+                ->label('Time zone'),
             ExportColumn::make('phone'),
             ExportColumn::make('source'),
             ExportColumn::make('stage')->formatStateUsing(fn ($state): string => $state->getLabel()),

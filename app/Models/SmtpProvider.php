@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\ProviderHealth;
 use App\Enums\ProviderType;
 use App\Enums\SmtpEncryption;
+use App\Models\Concerns\BelongsToClient;
 use App\Observers\SmtpProviderObserver;
 use Carbon\CarbonInterface;
 use Database\Factories\SmtpProviderFactory;
@@ -21,11 +22,11 @@ use LogicException;
 
 #[ObservedBy(SmtpProviderObserver::class)]
 #[Fillable(['name', 'type', 'host', 'port', 'encryption', 'username', 'password', 'api_key', 'daily_limit', 'monthly_limit', 'max_per_minute', 'priority', 'is_enabled'])]
-#[Hidden(['password', 'api_key', 'webhook_token_hash'])]
+#[Hidden(['password', 'api_key', 'webhook_token_hash', 'oauth_access_token', 'oauth_refresh_token'])]
 class SmtpProvider extends Model
 {
     /** @use HasFactory<SmtpProviderFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     /**
      * @var array<string, mixed>
@@ -61,6 +62,9 @@ class SmtpProvider extends Model
             'encryption' => SmtpEncryption::class,
             'password' => 'encrypted',
             'api_key' => 'encrypted',
+            'oauth_access_token' => 'encrypted',
+            'oauth_refresh_token' => 'encrypted',
+            'oauth_expires_at' => 'datetime',
             'port' => 'integer',
             'daily_limit' => 'integer',
             'monthly_limit' => 'integer',

@@ -19,6 +19,14 @@ enum ContactStage: string implements HasColor, HasDescription, HasLabel
     case Interested = 'interested';
     case Converted = 'converted';
 
+    /**
+     * Stages that mean the prospect answered, so no more follow-ups go to them.
+     */
+    public function meansReplied(): bool
+    {
+        return in_array($this, [self::Replied, self::Interested, self::Converted], true);
+    }
+
     public function getLabel(): string
     {
         return match ($this) {

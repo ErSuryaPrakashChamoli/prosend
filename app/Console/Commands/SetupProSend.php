@@ -5,10 +5,12 @@ namespace App\Console\Commands;
 use App\Enums\ProviderType;
 use App\Enums\SmtpEncryption;
 use App\Enums\UserRole;
+use App\Models\Client;
 use App\Models\SenderIdentity;
 use App\Models\SmtpProvider;
 use App\Models\User;
 use App\Services\Templates\SampleTemplates;
+use App\Services\Tenancy\CurrentClient;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -18,14 +20,20 @@ use Illuminate\Validation\Rules\Password;
 use function Laravel\Prompts\password;
 use function Laravel\Prompts\text;
 
-#[Signature('prosend:setup {--skip-admin : Do not create an administrator}')]
-#[Description('Create the first administrator, import the SMTP settings from .env, and add sample templates')]
+#[Signature('prosend:setup {--skip-admin : Do not create a Super Admin}')]
+#[Description('Create the first Super Admin, and import the SMTP settings from .env and sample templates into the first client')]
 class SetupProSend extends Command
 {
-    public function handle(): int
+    public function handle(CurrentClient $currentClient): int
     {
-        $this->importMailProvider();
-        $this->installSampleTemplates();
+        // The migrations create the Default client; the provider and templates belong to the oldest client.
+        $client = Client::query()->oldest('id')->firstOrFail();
+        $this->components->twoColumnDetail('Client', $client->name);
+
+        $currentClient->runAs($client, function (): void {
+            $this->importMailProvider();
+            $this->installSampleTemplates();
+        });
 
         if (! $this->option('skip-admin')) {
             $this->createAdministrator();
@@ -72,7 +80,7 @@ class SetupProSend extends Command
                 ProviderType::Brevo => 'Brevo',
                 ProviderType::Mailtrap => 'Mailtrap',
                 ProviderType::MailtrapSandbox => 'Mailtrap Sandbox',
-                ProviderType::Smtp => 'SMTP',
+                ProviderType::Smtp, ProviderType::Gmail, ProviderType::Microsoft365 => 'SMTP',
             },
             'type' => $type,
             'host' => $config['host'],
@@ -138,13 +146,13 @@ class SetupProSend extends Command
     private function createAdministrator(): void
     {
         if (User::query()->where('role', UserRole::Admin)->exists()) {
-            $this->components->twoColumnDetail('Administrator', '<fg=gray>already exists, skipped</>');
+            $this->components->twoColumnDetail('Super Admin', '<fg=gray>already exists, skipped</>');
 
             return;
         }
 
         if (! $this->input->isInteractive()) {
-            $this->components->warn('No administrator exists. Run "php artisan prosend:setup" interactively to create one.');
+            $this->components->warn('No Super Admin exists. Run "php artisan prosend:setup" interactively to create one.');
 
             return;
         }
@@ -166,6 +174,6 @@ class SetupProSend extends Command
             'role' => UserRole::Admin,
         ]);
 
-        $this->components->twoColumnDetail('Administrator', "<fg=green>{$email}</>");
+        $this->components->twoColumnDetail('Super Admin', "<fg=green>{$email}</>");
     }
 }

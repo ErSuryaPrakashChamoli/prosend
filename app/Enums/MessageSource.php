@@ -10,6 +10,8 @@ enum MessageSource: string implements HasLabel
     case Campaign = 'campaign';
     case Api = 'api';
     case Test = 'test';
+    case Inbox = 'inbox';
+    case Automation = 'automation';
 
     public function getLabel(): string
     {
@@ -18,6 +20,8 @@ enum MessageSource: string implements HasLabel
             self::Campaign => 'Campaign',
             self::Api => 'API',
             self::Test => 'Test email',
+            self::Inbox => 'Inbox reply',
+            self::Automation => 'Automation',
         };
     }
 }

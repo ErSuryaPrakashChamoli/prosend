@@ -1,6 +1,6 @@
 # ProSend
 
-ProSend is an email operations platform built on Laravel 13 and Filament 5. It manages contacts and consent, sends individual emails and rate-limited campaigns through Brevo, Mailtrap, or any SMTP provider, and tracks every message from queue to delivery.
+ProSend is a multi-client email outreach platform built on Laravel 13 and Filament 5. It manages prospects and consent, and sends individual emails and rate-limited campaigns with follow-up sequences through Brevo, Mailtrap, any SMTP provider, Gmail or Microsoft 365. It reads replies and bounces into a shared inbox and tracks every message from queue to delivery. Each client's data is kept separate.
 
 ## Requirements
 
@@ -24,7 +24,7 @@ php artisan prosend:setup
 
 Then sign in at `/admin`.
 
-Use `prosend:setup`, not `make:filament-user`, for the first account. Accounts created any other way get the **Viewer** role until an administrator changes it.
+Use `prosend:setup`, not `make:filament-user`, for the first account: it creates a Super Admin. Accounts created any other way can see no client until someone adds them under System > Members.
 
 ## Running ProSend
 
@@ -34,9 +34,11 @@ Every email is sent from the queue, so **a queue worker must be running** or not
 php artisan queue:work --queue=default
 ```
 
+If `PROSEND_AUTOMATION_QUEUE` names a separate queue for automation rules (recommended at volume), the worker must listen to it too: `--queue=default,automation`.
+
 In production, run the worker under a process supervisor such as Supervisor or systemd, and restart it after each deploy (`php artisan queue:restart`). Scheduled emails and campaigns are delayed queue jobs.
 
-Laravel's scheduler must also run every minute. It re-checks sending domains daily (`prosend:check-domains`, 03:00) and reviews warm-up plans daily (`prosend:evaluate-warmups`, 00:05):
+Laravel's scheduler must also run every minute. It sends due follow-ups (`prosend:run-sequences`, every minute), checks inbound mailboxes (`prosend:sync-inboxes`, every 5 minutes), re-checks sending domains (`prosend:check-domains`, 03:00), reviews warm-up plans (`prosend:evaluate-warmups`, 00:05) and prunes old data (`prosend:prune`, 02:30). Agency > System health shows whether the scheduler and queue are running:
 
 ```cron
 * * * * * cd /path/to/prosend && php artisan schedule:run >> /dev/null 2>&1
@@ -90,22 +92,35 @@ Infrastructure > SMTP providers holds any number of providers: Brevo, Mailtrap E
 
 Setup, testing, routing, and troubleshooting are covered in [docs/guides/mailtrap-and-smtp-providers.md](docs/guides/mailtrap-and-smtp-providers.md).
 
+## Clients
+
+ProSend can run outreach for several clients (or business units) at once. Prospects, campaigns, templates, mailboxes, conversations, rules, webhooks, API keys and audit entries each belong to one client. Nobody sees another client's data unless they are a member of that client: not in the panel, the API, exports, queue jobs or webhooks. Switch between clients with the menu at the top of the panel.
+
+Super Admins manage clients under Agency > Clients. Deactivating a client blocks its members and API keys, and holds its follow-ups, automation rules and webhooks until it is active again. Emails already queued still go out, so pause its campaigns first if they must stop. Each client's own settings (postal address for email footers, default sending days and hours, tracking) are under Client settings in the client menu. Existing data from before clients belongs to "Default client".
+
 ## Roles
+
+People are users of the whole agency. Each person has a role in each client they belong to, set under System > Members, where client Admins can also invite people by email. **Super Admins** can do everything in every client.
 
 | Role | Can |
 | --- | --- |
-| Administrator | Everything, including approving campaigns, SMTP providers, sender identities, domain authentication, warm-up plans, users, removing suppressions, and audit logs. |
-| Sender | Manage contacts, lists, segments, and templates; import and export; compose email; and create, submit, pause, and cancel campaigns. |
-| Viewer | Read the dashboard, email activity, contacts, and campaigns. |
+| Admin | Everything in the client, including mailboxes, deliverability, integrations, members, settings and the audit log. |
+| Team Leader | Everything a Campaign Manager can, plus approve campaigns. |
+| Campaign Manager | Manage prospects, templates, campaigns, tasks and automation rules; import and export; compose email; work the inbox; read and export reports. |
+| Sales Executive | Work with prospects, send individual emails, and reply to conversations assigned to them or with prospects they own. |
+| Analyst | Read everything and export prospects, activity and reports. |
+| Guest Viewer | Read-only. |
+
+Super Admins can create further roles from 28 permissions under Agency > Roles. Nobody can give someone a role with permissions they lack themselves. System > Teams groups people for reports. Accounts that existed before clients keep equivalent access: administrators are Super Admins, senders are Campaign Managers and viewers are Guest Viewers.
 
 Provider changes (never the secrets themselves), role changes, sender verification, campaign submissions, approvals, returns to draft, pauses, cancellations and retries, and suppression changes are recorded under System > Audit logs.
 
 ## Prospects
 
-Contacts double as prospects. Besides name, company and consent, each has a job title, industry, website, stage (New, Active, Contacted, Replied, Interested, Converted), owner, last contacted and last reply dates, and notes. The contacts table filters and bulk-updates by stage and owner, and segments can match job title, industry, source and stage.
+Contacts double as prospects. Besides name, company and consent, each has a job title, industry, website, time zone, stage (New, Active, Contacted, Replied, Interested, Converted), owner, last contacted and last reply dates, and notes. The contacts table filters and bulk-updates by stage and owner, and segments can match job title, industry, source and stage.
 
 - **Last contacted** is set when a provider accepts a campaign or Compose email to the contact, and a New or Active prospect then moves to Contacted. Email sent through the API, such as receipts, does not count.
-- **Last reply** and the Replied stage are recorded by hand: ProSend has no inbox, so it cannot see replies.
+- **Last reply** and the Replied stage are set when a reply arrives in an inbound mailbox (see Inbox), and can also be set by hand.
 - **Unsubscribed and Do Not Contact are not stages.** They are the contact's unsubscribe and the suppression list, which every send checks. **Do not contact** on a contact's page adds a manual suppression; only an administrator can remove it.
 
 ## Importing contacts
@@ -151,7 +166,71 @@ Deliverability > Warm-up planner limits daily volume for a provider, or for one 
 - If hard bounces or complaints go over the limits, the plan pauses itself and says why. Throttling, unauthenticated domains, and too little data produce recommendations instead of increases.
 - ProSend never simulates opens, clicks, or replies, and never sends to fake mailboxes. Opens and clicks are not used in the review because privacy proxies and scanners make them unreliable. A schedule does not guarantee inbox placement. `App\Services\Warmup\Contracts\DeliverabilityMonitor` is the extension point for a real third-party monitoring service.
 
+## Sequences
+
+A campaign is a sequence: the first email, then up to 10 follow-ups, each sent a set number of days after the previous one. Each follow-up can be sent only if there was no reply, if the previous email was opened, or if it was not opened. A follow-up without its own subject is sent in the same thread as the first email, as "Re:" the first subject. The prospect's sequence stops at once on a reply, unsubscribe, hard bounce, spam complaint or suppression; an auto-reply such as "out of office" does not stop it.
+
+- **Sending window:** each campaign sends only on chosen days and between chosen hours. These are in the prospect's time zone when known, otherwise the campaign's. Defaults come from Client settings.
+- **Prospects tab** on a campaign shows where every prospect is (in sequence, replied, bounced, unsubscribed, finished, failed, stopped), when the next follow-up is due, and the full history. From there you can mark a prospect as replied or stop their sequence.
+- **Tracking:** opens (a pixel) and clicks (signed redirect links) are tracked by ProSend itself when enabled on the campaign, for any provider. Both are approximate: privacy features and link scanners distort them.
+- Campaigns can be archived to hide them from the list, and duplicated with their follow-ups and A/B versions.
+
+## A/B testing
+
+Any email in a sequence can have up to four extra versions (B to E), each with its own subject and content and a share of the prospects. A prospect gets the same version on every run. The campaign page compares sent, opened, clicked, replied and bounced per version. A winner is named only after every version has 100 sent emails and the leader is ahead with 95% confidence, judged on replies (or on opens while nobody has replied). A version can be stopped at any time.
+
+## Inbox
+
+Add a mailbox under Infrastructure > Inbound mailboxes (IMAP host and password, or a connected Gmail / Microsoft 365 account). ProSend reads new mail every 5 minutes without marking anything as read. It:
+
+- Matches replies to the email they answer and the prospect who sent it, which ends that prospect's sequence and starts a conversation.
+- Recognises auto-replies (out of office) and keeps them out of reply counts.
+- Reads bounce reports from mail servers and suppresses the bounced address, but only when the report really came from a mail system and names the address the email went to.
+
+Inbox > Conversations is a shared inbox across mailboxes. Each conversation has a status (New, Open, Interested, Not interested, Follow-up, Converted, Closed), unread and starred flags, an assignee and private notes. You can reply in the same thread. Sales Executives see only conversations assigned to them or with prospects they own.
+
+## Automation rules
+
+Email Operations > Automation rules run when something happens to a prospect. The triggers are:
+
+- The prospect is created, imported, changes stage or unsubscribes.
+- A campaign starts or completes.
+- An email is sent, opened, clicked, replied to or bounces.
+
+Conditions narrow a rule down: stage, tag, industry, campaign, consent, and whether the prospect has an owner. The actions are:
+
+- Add or remove a tag, set the stage or assign an owner.
+- Stop the prospect's sequences.
+- Create a task.
+- Send a notification or an email.
+- Call a webhook.
+
+Every run is logged with its result. A rule's emails never start other rules, and they are capped per prospect and per rule each day. Only people who can approve campaigns can save a rule that sends email.
+
+Inbox > Tasks holds follow-up work for people, from rules or created by hand.
+
+## Webhooks
+
+Infrastructure > Webhooks sends the same events that trigger automation rules to your own URLs, such as a CRM, Zapier or Make. Each delivery is signed with the [Standard Webhooks](https://www.standardwebhooks.com/) scheme, is retried with backoff, and is logged and can be sent again. An endpoint is turned off after 50 failed deliveries in a row. Webhook URLs on private or internal networks are refused unless `PROSEND_WEBHOOKS_ALLOW_PRIVATE_HOSTS=true`.
+
+## Gmail and Microsoft 365
+
+Under Infrastructure > SMTP providers, **Connect Gmail** and **Connect Microsoft 365** sign in to a mailbox with OAuth, then send through its API and read replies from it. Tokens are stored encrypted and refreshed automatically. If the account withdraws access, the mailbox is marked disconnected until it is connected again. Deleting the mailbox in ProSend does not withdraw access at Google or Microsoft, so remove it there too.
+
+**Not yet verified with real accounts.** This needs your own OAuth apps:
+
+- **Google:** an OAuth client in Google Cloud with the Gmail API enabled and the scopes `gmail.send` and `gmail.readonly`. Set the redirect URI to `{APP_URL}/admin/oauth/google/callback`. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. These scopes are restricted: until Google verifies the app, only test users you list can connect.
+- **Microsoft:** an Azure app registration with the delegated permissions `Mail.Send`, `Mail.Read`, `User.Read` and `offline_access`. Set the redirect URI to `{APP_URL}/admin/oauth/microsoft/callback`. Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` and `MICROSOFT_TENANT`.
+
 ## Reports
+
+Overview > Reports groups outreach results by campaign, person, team, mailbox, day or, for Super Admins, client:
+
+- Sent, delivered, opened, clicked, replied.
+- Positive replies, conversions.
+- Bounces, unsubscribes.
+
+Each count comes with its rate. Reports download as CSV or Excel, or open as a printable page to save as PDF from the browser. Positive replies are conversations marked Interested or Converted; conversions are those marked Converted.
 
 The dashboard covers delivery stats, sending volume, outcomes, bounce and complaint rate trends, volume by sending domain, provider performance, campaign performance, and queue throughput. All of it is filterable by date, email type, provider, campaign, and sending domain. An audience panel shows current totals regardless of those filters: contacts by stage, contacts eligible for marketing, suppressed addresses, unsubscribes, and campaigns by status. Email activity and the suppression list have tabs for bounces, complaints, failures, and unsubscribes. Email activity and each campaign's recipients can be exported to CSV. In every export, a cell starting with `=`, `+`, `-` or `@` gets a leading apostrophe so spreadsheets do not run it as a formula; the contact importer removes that apostrophe again.
 
@@ -161,12 +240,18 @@ Other applications can send transactional email through ProSend and read its sta
 
 ### API keys
 
-An administrator creates keys under Infrastructure > API keys. Each key has:
+People with the "Manage API keys and webhooks" permission (client Admins by default) create keys under Infrastructure > API keys. A key belongs to one client and only ever sees that client's data. Each key has:
 
-- **Scopes:** `emails:send`, `emails:send_marketing` (marketing email also needs `emails:send`), `emails:read` (emails this key sent), and `emails:read_all` (every email; includes `emails:read`).
+- **Scopes:**
+  - `emails:send`, `emails:send_marketing` (marketing email also needs `emails:send`), `emails:read` (emails this key sent), and `emails:read_all` (every email; includes `emails:read`).
+  - `prospects:read`, `prospects:write` (create or update prospects by email and record unsubscribes; includes read).
+  - `campaigns:read`, `campaigns:write` (add prospects to draft campaigns; includes read).
+  - `conversations:read`.
+
+  You can only give a key access you have yourself in the panel.
 - **Allowed senders:** the sender identities it may use as From. Required for sending keys.
 - **Limits:** requests per minute (default 60), an optional daily send limit (every To, CC and BCC address counts as one email), an optional IP allowlist (addresses or CIDR ranges), and an optional expiry. Behind a load balancer or reverse proxy, set `PROSEND_TRUSTED_PROXIES` to its addresses, or ProSend sees the proxy's address instead of the caller's and IP allowlists cannot work.
-- **Mode:** a **live** key (`psk_live_…`) sends. A **test** key (`psk_test_…`) runs every check and records the email with the status *Test (not sent)*, but never contacts a provider. Test emails are left out of reports.
+- **Mode:** a **live** key (`psk_live_…`) sends. A **test** key (`psk_test_…`) runs every check and records the email with the status *Test (not sent)*, but never contacts a provider. Test emails are left out of reports. Test keys cannot have `prospects:write` or `campaigns:write`, because those changes would be real.
 
 The full key is shown **once**, when it is created or rotated. ProSend stores only a hash of the secret, so a lost key cannot be recovered: rotate it. Rotating issues a new key and keeps the old one working for a grace period you choose (none, 1, 3, or 7 days). Revoking stops a key immediately. Creating, editing, rotating, and revoking keys are audit-logged; the logs never include the secret.
 
@@ -227,12 +312,14 @@ Every request is logged (method, path, status, duration, IP, error code; never h
 | API request logs | 30 days | `PROSEND_RETAIN_API_LOGS_DAYS` |
 | API usage counts | 13 months | `PROSEND_RETAIN_API_USAGE_MONTHS` |
 | Audit logs | 24 months | `PROSEND_RETAIN_AUDIT_MONTHS` |
+| Automation rule runs | 90 days | `PROSEND_RETAIN_AUTOMATION_RUNS_DAYS` |
+| Webhook deliveries | 30 days | `PROSEND_RETAIN_WEBHOOK_DELIVERIES_DAYS` |
 
 Messages still queued, retrying, or sending are never pruned, and an attachment file shared by several emails is only deleted once none of them needs it. An email whose content was pruned can no longer be retried.
 
 ## Configuration
 
-All ProSend settings live in `config/prosend.php`, and most can be overridden in `.env`; see the `PROSEND_*` keys in `.env.example`. SMTP credentials for providers added in the panel are stored encrypted with `APP_KEY`. **Do not rotate `APP_KEY`** without re-entering provider passwords, or they can no longer be decrypted.
+All ProSend settings live in `config/prosend.php`, and most can be overridden in `.env`; see the `PROSEND_*` keys in `.env.example`. SMTP and IMAP passwords, OAuth tokens and webhook secrets are stored encrypted with `APP_KEY`. **Do not rotate `APP_KEY`** without re-entering them, or they can no longer be decrypted.
 
 ## Development
 
@@ -248,11 +335,12 @@ Tests refuse to run unless the database is in-memory SQLite. A cached configurat
 
 ## Not built yet
 
-Phase 3 is being built in milestones; the approved plan is in [docs/specs/phase-3.md](docs/specs/phase-3.md). The sending API (milestone 1) is above. Still to come:
+The audit of this platform against the outreach brief, and what was built, are in [docs/woodpecker/report.md](docs/woodpecker/report.md). Still to come:
 
-- API endpoints for contacts, lists, and campaigns.
-- Outgoing webhooks, so your applications learn about deliveries and bounces without polling.
+- Automated warm-up (exchanging emails with a network of real mailboxes). This needs a third-party service; ProSend's planner only ramps volume.
+- Defined custom fields per client. Free-form custom attributes work today.
+- One combined timeline per prospect.
+- Native CRM and Google Sheets connectors. The API and webhooks work with Zapier, Make and similar tools.
 - Two-person approval for contact imports, with a preview before processing.
-- Automation workflows.
 - Processing Mailtrap's delivery webhooks. Until then, Mailtrap email stays *Accepted by provider*.
 - API-based providers (Resend, Mailjet, SMTP2GO, Amazon SES) and fallback between providers. SMTP endpoints of these work today as generic SMTP.

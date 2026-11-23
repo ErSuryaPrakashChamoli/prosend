@@ -4,18 +4,29 @@ namespace App\Filament\Resources\Campaigns\Schemas;
 
 use App\Enums\AudienceType;
 use App\Enums\EmailPurpose;
+use App\Enums\StepCondition;
+use App\Models\CampaignVariant;
 use App\Models\EmailTemplate;
 use App\Models\SenderIdentity;
+use App\Services\Campaigns\AbTestResults;
 use App\Services\Sending\EmailContentRenderer;
 use App\Services\Sending\TemplateVariables;
+use App\Services\Tenancy\CurrentClient;
+use Closure;
+use DateTimeZone;
+use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Radio;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\RichEditor\RichContentRenderer;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\TimePicker;
+use Filament\Forms\Components\Toggle;
+use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
@@ -103,7 +114,8 @@ class CampaignForm
                             ->searchable()
                             ->helperText('Only verified sender identities on enabled providers are listed.'),
                     ]),
-                Section::make('Content')
+                Section::make('First email')
+                    ->description('Everyone in the audience gets this email first. Follow-ups below go only to people who have not replied, unsubscribed or bounced.')
                     ->columnSpanFull()
                     ->schema([
                         Select::make('email_template_id')
@@ -143,8 +155,169 @@ class CampaignForm
                             ->label('Required variables')
                             ->placeholder('Add a variable name')
                             ->helperText('Contacts without a value for one of these are skipped.'),
+                        static::variantsRepeater('firstEmailVariants', 'Same subject as version A'),
+                    ]),
+                Section::make('Follow-ups')
+                    ->description('Each follow-up waits the given number of days after the previous email, then goes out inside the sending schedule. A reply, unsubscribe, bounce or complaint ends the sequence for that prospect.')
+                    ->columnSpanFull()
+                    ->schema([
+                        Repeater::make('steps')
+                            ->hiddenLabel()
+                            ->relationship()
+                            ->orderColumn('position')
+                            ->defaultItems(0)
+                            ->maxItems(10)
+                            ->addActionLabel('Add follow-up')
+                            ->collapsible()
+                            ->cloneable()
+                            ->itemLabel(fn (array $state): string => 'Follow-up · wait '.((int) ($state['wait_days'] ?? 0)).' day(s)'.(filled($state['subject'] ?? null) ? ' · new subject' : ' · same thread'))
+                            ->schema([
+                                Grid::make(3)->schema([
+                                    TextInput::make('wait_days')
+                                        ->label('Wait')
+                                        ->numeric()
+                                        ->integer()
+                                        ->minValue(1)
+                                        ->maxValue(60)
+                                        ->default(3)
+                                        ->suffix('days')
+                                        ->required()
+                                        ->live(onBlur: true),
+                                    Select::make('condition')
+                                        ->label('Send')
+                                        ->options(StepCondition::class)
+                                        ->default(StepCondition::NoReply)
+                                        ->required(),
+                                    TextInput::make('subject')
+                                        ->maxLength(255)
+                                        ->placeholder('Re: first email\'s subject')
+                                        ->helperText('Leave empty to reply in the same thread.')
+                                        ->live(onBlur: true),
+                                ]),
+                                RichEditor::make('body')
+                                    ->label('Content')
+                                    ->mergeTags(EmailContentRenderer::MERGE_TAGS)
+                                    ->fileAttachments(false)
+                                    ->required()
+                                    ->extraInputAttributes(['style' => 'min-height: 10rem;']),
+                                Textarea::make('text_body')
+                                    ->label('Plain-text version')
+                                    ->rows(3)
+                                    ->helperText('Optional. Generated from the content when empty.'),
+                                static::variantsRepeater('variants', 'Same as version A'),
+                            ]),
+                    ]),
+                Section::make('Sending schedule')
+                    ->description('Emails, including follow-ups, only go out on these days and hours. Outside them they wait.')
+                    ->columnSpan(2)
+                    ->columns(2)
+                    ->schema([
+                        CheckboxList::make('send_days')
+                            ->label('Days')
+                            ->options([1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'Sat', 7 => 'Sun'])
+                            ->default(fn (): array => app(CurrentClient::class)->get()?->default_send_days ?? [1, 2, 3, 4, 5])
+                            ->columns(7)
+                            ->helperText('None ticked means every day.')
+                            ->dehydrateStateUsing(fn (?array $state): ?array => filled($state) ? array_values(array_map(intval(...), $state)) : null)
+                            ->columnSpanFull(),
+                        TimePicker::make('send_window_start')
+                            ->label('From')
+                            ->seconds(false)
+                            ->format('H:i')
+                            ->default(fn (): ?string => static::clientDefault('default_send_window_start', '09:00'))
+                            ->requiredWith('send_window_end')
+                            ->helperText('Leave both times empty to send at any hour.'),
+                        TimePicker::make('send_window_end')
+                            ->label('Until')
+                            ->seconds(false)
+                            ->format('H:i')
+                            ->default(fn (): ?string => static::clientDefault('default_send_window_end', '17:00'))
+                            ->requiredWith('send_window_start')
+                            ->after('send_window_start'),
+                        Select::make('timezone')
+                            ->label('Time zone')
+                            ->options(fn (): array => array_combine(DateTimeZone::listIdentifiers(), DateTimeZone::listIdentifiers()))
+                            ->searchable()
+                            ->placeholder('The client\'s time zone')
+                            ->default(fn (): ?string => app(CurrentClient::class)->get()?->timezone),
+                        Toggle::make('use_prospect_timezone')
+                            ->label('Use each prospect\'s own time zone')
+                            ->helperText('When a prospect has a time zone, their local days and hours apply.')
+                            ->inline(false),
+                    ]),
+                Section::make('Tracking')
+                    ->columnSpan(1)
+                    ->schema([
+                        Toggle::make('track_opens')
+                            ->label('Track opens')
+                            ->default(fn (): bool => app(CurrentClient::class)->get()?->default_track_opens ?? true)
+                            ->helperText('Approximate: some mail apps open every email, others block the image.'),
+                        Toggle::make('track_clicks')
+                            ->label('Track clicks')
+                            ->default(fn (): bool => app(CurrentClient::class)->get()?->default_track_clicks ?? false)
+                            ->helperText('Links go through this site first. Rewritten links can hurt deliverability for cold outreach.'),
                     ]),
             ]);
+    }
+
+    /**
+     * A/B versions of an email. The content above is version A, which keeps whatever share of prospects the other
+     * versions leave; each prospect always gets the same version.
+     */
+    private static function variantsRepeater(string $relationship, string $subjectPlaceholder): Repeater
+    {
+        return Repeater::make($relationship)
+            ->label('A/B test versions')
+            ->helperText('Optional. The content above is version A and gets the share of prospects the other versions leave. Winners are only named once each version reached '.AbTestResults::MIN_SAMPLE.' people.')
+            ->relationship()
+            ->orderColumn('position')
+            ->defaultItems(0)
+            ->maxItems(CampaignVariant::MAX_VARIANTS)
+            ->addActionLabel('Add version')
+            ->collapsible()
+            ->collapsed()
+            ->itemLabel(fn (array $state): string => 'Alternative version (B, C, … in this order) · '.((int) ($state['weight'] ?? 0)).'% of prospects')
+            ->rule(fn (): Closure => function (string $attribute, mixed $value, Closure $fail): void {
+                if (collect($value ?? [])->sum(fn (array $item): int => (int) ($item['weight'] ?? 0)) > 99) {
+                    $fail('The versions\' shares add up to more than 99%. Leave at least 1% for version A.');
+                }
+            })
+            ->schema([
+                Grid::make(3)->schema([
+                    TextInput::make('weight')
+                        ->label('Share')
+                        ->numeric()
+                        ->integer()
+                        ->minValue(1)
+                        ->maxValue(99)
+                        ->default(50)
+                        ->suffix('%')
+                        ->required()
+                        ->live(onBlur: true),
+                    TextInput::make('subject')
+                        ->maxLength(255)
+                        ->placeholder($subjectPlaceholder)
+                        ->columnSpan(2),
+                ]),
+                RichEditor::make('body')
+                    ->label('Content')
+                    ->mergeTags(EmailContentRenderer::MERGE_TAGS)
+                    ->fileAttachments(false)
+                    ->required(),
+                Textarea::make('text_body')
+                    ->label('Plain-text version')
+                    ->rows(3),
+            ]);
+    }
+
+    /**
+     * A client's default, or the fallback while the client has not set one.
+     */
+    private static function clientDefault(string $setting, string $fallback): string
+    {
+        $client = app(CurrentClient::class)->get();
+
+        return filled($client?->{$setting}) ? (string) $client->{$setting} : $fallback;
     }
 
     private static function purpose(mixed $state): EmailPurpose

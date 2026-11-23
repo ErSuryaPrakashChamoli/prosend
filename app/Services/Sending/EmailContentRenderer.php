@@ -12,6 +12,8 @@ use Filament\Forms\Components\RichEditor\RichContentRenderer;
  */
 class EmailContentRenderer
 {
+    public function __construct(private EmailTracker $tracker) {}
+
     /**
      * Merge tags available in subjects and bodies.
      *
@@ -29,19 +31,27 @@ class EmailContentRenderer
         'unsubscribe_url' => 'Unsubscribe link',
     ];
 
-    public function render(EmailMessage $message): RenderedEmail
+    /**
+     * With $track off (previews, the inbox thread), no tracking is added: viewing an email in the panel must never count
+     * as the recipient opening it.
+     */
+    public function render(EmailMessage $message, bool $track = true): RenderedEmail
     {
         $unsubscribeUrl = $message->purpose === EmailPurpose::Marketing ? $message->unsubscribeUrl() : null;
 
         $campaign = $message->campaign;
+        // An A/B version's content comes first, then a follow-up's step, then the campaign for the first email.
+        $content = $message->campaignVariant ?? $message->campaignStep ?? $campaign;
 
-        return $this->renderContent(
+        $rendered = $this->renderContent(
             subject: $message->subject,
-            body: $campaign?->body ?? $message->html_body ?? '',
+            body: $content?->body ?? $message->html_body ?? '',
             variables: $this->variablesFor($message, $unsubscribeUrl),
             unsubscribeUrl: $unsubscribeUrl,
-            textBody: $campaign ? $campaign->text_body : $message->text_body,
+            textBody: $content ? $content->text_body : $message->text_body,
         );
+
+        return $campaign === null || ! $track ? $rendered : $this->tracker->instrument($rendered, $message, $campaign);
     }
 
     /**

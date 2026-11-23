@@ -3,7 +3,11 @@
 namespace App\Models;
 
 use App\Enums\EmailPurpose;
+use App\Enums\OutreachEvent;
 use App\Enums\SuppressionReason;
+use App\Models\Concerns\BelongsToClient;
+use App\Services\Automation\OutreachEvents;
+use App\Services\Campaigns\SequenceProgress;
 use Database\Factories\SuppressionFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Casts\Attribute;
@@ -16,7 +20,30 @@ use Illuminate\Support\Str;
 class Suppression extends Model
 {
     /** @use HasFactory<SuppressionFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
+
+    /**
+     * A suppressed address gets no more follow-ups from this client.
+     */
+    protected static function booted(): void
+    {
+        static::saved(function (Suppression $suppression): void {
+            if ($suppression->wasRecentlyCreated || $suppression->wasChanged('reason')) {
+                rescue(fn () => app(SequenceProgress::class)->stopForSuppression($suppression->client_id, $suppression->email, $suppression->reason));
+
+                $event = match ($suppression->reason) {
+                    SuppressionReason::Unsubscribed, SuppressionReason::Complaint => OutreachEvent::ProspectUnsubscribed,
+                    SuppressionReason::HardBounce, SuppressionReason::InvalidAddress => OutreachEvent::EmailBounced,
+                    SuppressionReason::Manual => null,
+                };
+
+                if ($event !== null) {
+                    $contact = Contact::acrossClients()->where('client_id', $suppression->client_id)->where('email', $suppression->email)->first();
+                    app(OutreachEvents::class)->dispatch($event, $suppression->client_id, $contact, ['email_address' => $suppression->email, 'reason' => $suppression->reason->value], "suppression:{$suppression->getKey()}:{$suppression->reason->value}");
+                }
+            }
+        });
+    }
 
     /**
      * @return array<string, string>

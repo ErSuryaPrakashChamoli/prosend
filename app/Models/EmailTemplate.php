@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\EmailPurpose;
 use App\Enums\TemplateCategory;
 use App\Enums\TemplateStatus;
+use App\Models\Concerns\BelongsToClient;
 use App\Services\Sending\TemplateVariables;
 use Database\Factories\EmailTemplateFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -19,7 +20,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class EmailTemplate extends Model
 {
     /** @use HasFactory<EmailTemplateFactory> */
-    use HasFactory;
+    use BelongsToClient, HasFactory;
 
     /**
      * Changing any of these creates a new version.

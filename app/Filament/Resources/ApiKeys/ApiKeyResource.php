@@ -66,12 +66,36 @@ class ApiKeyResource extends Resource
                     ->options(ApiScope::class)
                     ->required()
                     ->live()
+                    ->helperText('You can only give a key access you have yourself. Test keys cannot change prospects or campaigns.')
                     ->rules([
-                        fn (): Closure => function (string $attribute, mixed $value, Closure $fail): void {
+                        fn (Get $get, ?ApiKey $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($get, $record): void {
                             $scopes = array_map(fn (mixed $scope): string => $scope instanceof ApiScope ? $scope->value : (string) $scope, (array) $value);
 
                             if (in_array(ApiScope::EmailsSendMarketing->value, $scopes, true) && ! in_array(ApiScope::EmailsSend->value, $scopes, true)) {
                                 $fail('Sending marketing email also needs the "Send email" scope.');
+                            }
+
+                            $mode = $record?->mode ?? ApiKeyMode::tryFrom($get('mode') instanceof ApiKeyMode ? $get('mode')->value : (string) $get('mode'));
+                            $user = auth()->user();
+
+                            foreach (array_diff($scopes, $record?->scopes ?? []) as $added) {
+                                $scope = ApiScope::tryFrom($added);
+
+                                if ($scope === null) {
+                                    continue;
+                                }
+
+                                if ($mode === ApiKeyMode::Test && $scope->changesData()) {
+                                    $fail("Test keys cannot have {$scope->value}: changes to prospects and campaigns are real, not simulated.");
+                                }
+
+                                foreach ($scope->requiredPermissions() as $permission) {
+                                    if (! $user?->hasPermission($permission)) {
+                                        $fail("You cannot give a key {$scope->value}: it needs the \"{$permission->getLabel()}\" permission, which you do not have.");
+
+                                        break;
+                                    }
+                                }
                             }
                         },
                     ])

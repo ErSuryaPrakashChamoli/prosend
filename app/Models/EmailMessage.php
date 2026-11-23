@@ -8,6 +8,11 @@ use App\Enums\EmailPurpose;
 use App\Enums\EventSource;
 use App\Enums\MessageSource;
 use App\Enums\MessageStatus;
+use App\Enums\OutreachEvent;
+use App\Enums\SequenceStatus;
+use App\Models\Concerns\BelongsToClient;
+use App\Services\Automation\OutreachEvents;
+use App\Services\Campaigns\SequenceProgress;
 use Carbon\CarbonInterface;
 use Database\Factories\EmailMessageFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -21,11 +26,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
-#[Fillable(['campaign_id', 'contact_id', 'sender_identity_id', 'created_by', 'api_key_id', 'idempotency_key', 'purpose', 'source', 'status', 'to_email', 'to_name', 'cc', 'bcc', 'reply_to', 'subject', 'html_body', 'text_body', 'email_template_id', 'attachments', 'tags', 'metadata', 'variables', 'scheduled_at', 'queued_at'])]
+#[Fillable(['campaign_id', 'campaign_step_id', 'step_number', 'campaign_variant_id', 'contact_id', 'sender_identity_id', 'created_by', 'api_key_id', 'idempotency_key', 'purpose', 'source', 'status', 'to_email', 'to_name', 'cc', 'bcc', 'reply_to', 'subject', 'html_body', 'text_body', 'email_template_id', 'attachments', 'tags', 'metadata', 'variables', 'scheduled_at', 'queued_at'])]
 class EmailMessage extends Model
 {
     /** @use HasFactory<EmailMessageFactory> */
-    use HasFactory, HasUuids;
+    use BelongsToClient, HasFactory, HasUuids;
 
     /**
      * A sending claim older than this belongs to an attempt that died. It must exceed the send job's
@@ -51,6 +56,7 @@ class EmailMessage extends Model
             // Per-send variables can hold links with secrets, such as password reset tokens.
             'variables' => 'encrypted:array',
             'attempts' => 'integer',
+            'step_number' => 'integer',
             'is_retryable' => 'boolean',
             'is_sandbox' => 'boolean',
             'scheduled_at' => 'datetime',
@@ -61,6 +67,14 @@ class EmailMessage extends Model
             'delivered_at' => 'datetime',
             'failed_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function clientConsistentRelations(): array
+    {
+        return ['campaign', 'contact', 'senderIdentity', 'emailTemplate', 'smtpProvider', 'apiKey'];
     }
 
     /**
@@ -77,6 +91,26 @@ class EmailMessage extends Model
     public function campaign(): BelongsTo
     {
         return $this->belongsTo(Campaign::class);
+    }
+
+    /**
+     * The follow-up this email belongs to, or null for a campaign's first email.
+     *
+     * @return BelongsTo<CampaignStep, $this>
+     */
+    public function campaignStep(): BelongsTo
+    {
+        return $this->belongsTo(CampaignStep::class);
+    }
+
+    /**
+     * The A/B version this email carried, or null for version A.
+     *
+     * @return BelongsTo<CampaignVariant, $this>
+     */
+    public function campaignVariant(): BelongsTo
+    {
+        return $this->belongsTo(CampaignVariant::class);
     }
 
     /**
@@ -270,9 +304,15 @@ class EmailMessage extends Model
             $attributes = [...$attributes, 'status' => MessageStatus::Accepted, 'error_code' => null, 'error_message' => null, 'is_retryable' => false];
         }
 
-        $this->forceFill($attributes)->save();
+        // Together, so a completion check by another worker never sees the email sent but the next follow-up missing.
+        DB::transaction(function () use ($attributes): void {
+            $this->forceFill($attributes)->save();
+            $this->advanceSequence();
+        });
 
         $this->recordEvent(EmailEventType::Accepted, details: ['provider' => $provider->name]);
+
+        $this->announce(OutreachEvent::EmailSent, "sent:{$this->getKey()}");
 
         // Email sent by people counts as outreach; system email from the API, such as receipts, does not.
         // The email has already been sent, so a failure here is reported but never stops the send job.
@@ -310,16 +350,73 @@ class EmailMessage extends Model
      */
     public function markCaptured(SmtpProvider $provider): void
     {
-        $this->forceFill([
-            'status' => MessageStatus::Captured,
-            'smtp_provider_id' => $provider->getKey(),
-            'captured_at' => now(),
-            'error_code' => null,
-            'error_message' => null,
-            'is_retryable' => false,
-        ])->save();
+        // A sandbox runs the whole sequence, so it can be tested end to end.
+        DB::transaction(function () use ($provider): void {
+            $this->forceFill([
+                'status' => MessageStatus::Captured,
+                'smtp_provider_id' => $provider->getKey(),
+                'captured_at' => now(),
+                'error_code' => null,
+                'error_message' => null,
+                'is_retryable' => false,
+            ])->save();
+
+            $this->advanceSequence();
+        });
 
         $this->recordEvent(EmailEventType::Captured, details: ['provider' => $provider->name, 'sandbox' => true]);
+    }
+
+    /**
+     * Tell automation rules and webhooks about something that happened to this email.
+     */
+    public function announce(OutreachEvent $event, string $occurrence, array $extra = []): void
+    {
+        app(OutreachEvents::class)->dispatch($event, $this->client_id, $this->contact, [
+            'campaign_id' => $this->campaign_id,
+            'email' => [
+                'id' => $this->uuid,
+                'subject' => $this->subject,
+                'to' => $this->to_email,
+                'step' => $this->campaign_id === null ? null : $this->step_number,
+                'source' => $this->source?->value,
+            ],
+            ...$extra,
+        ], $occurrence,
+            // Automation emails never start rules themselves, so two rules (or one rule on "email sent") cannot keep
+            // emailing each other. Webhooks still hear about them.
+            startsRules: $this->source !== MessageSource::Automation);
+    }
+
+    /**
+     * Move the campaign prospect on to their next follow-up. The email is already sent, so a failure here is reported
+     * but never stops the send job.
+     */
+    private function advanceSequence(): void
+    {
+        if ($this->campaign_id !== null) {
+            rescue(fn () => app(SequenceProgress::class)->stepSent($this));
+        }
+    }
+
+    /**
+     * This email will never go out, so the prospect's sequence ends.
+     */
+    private function endSequence(SequenceStatus $status, string $reason): void
+    {
+        if ($this->campaign_id !== null) {
+            rescue(fn () => app(SequenceProgress::class)->stepFailed($this, $status, $reason));
+        }
+    }
+
+    /**
+     * Cancel an email whose prospect left the sequence after it was queued, such as by replying.
+     */
+    public function cancelForEndedSequence(string $reason): void
+    {
+        $this->forceFill(['status' => MessageStatus::Cancelled, 'error_message' => Str::limit($reason, 1000)])->save();
+
+        $this->recordEvent(EmailEventType::Cancelled, details: ['reason' => Str::limit($reason, 500)]);
     }
 
     public function markDeferred(string $summary, ?string $code = null): void
@@ -347,6 +444,11 @@ class EmailMessage extends Model
         ])->save();
 
         $this->recordEvent(EmailEventType::Failed, details: ['reason' => Str::limit($summary, 500)]);
+
+        // A configuration problem can be retried and the sequence continues then; a rejected email ends it.
+        if (! $retryable) {
+            $this->endSequence(SequenceStatus::Failed, $summary);
+        }
     }
 
     public function markAmbiguous(string $summary): void
@@ -358,6 +460,9 @@ class EmailMessage extends Model
         ])->save();
 
         $this->recordEvent(EmailEventType::Ambiguous, details: ['reason' => Str::limit($summary, 500)]);
+
+        // The email may have been sent; following up blindly could look like a duplicate.
+        $this->endSequence(SequenceStatus::Failed, 'Delivery of this step is uncertain.');
     }
 
     public function markSuppressed(string $reason): void
@@ -368,6 +473,8 @@ class EmailMessage extends Model
         ])->save();
 
         $this->recordEvent(EmailEventType::Suppressed, details: ['reason' => $reason]);
+
+        $this->endSequence(SequenceStatus::Stopped, "Not sent: {$reason}");
     }
 
     /**
@@ -386,6 +493,10 @@ class EmailMessage extends Model
         ])->save();
 
         $this->recordEvent(EmailEventType::Queued, details: ['reason' => 'Retry requested']);
+
+        if ($this->campaign_id !== null) {
+            app(SequenceProgress::class)->reactivateForRetry($this);
+        }
     }
 
     /**

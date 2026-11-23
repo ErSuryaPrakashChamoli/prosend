@@ -32,7 +32,7 @@ class SegmentForm
                         TextInput::make('name')
                             ->required()
                             ->maxLength(255)
-                            ->unique(ignoreRecord: true),
+                            ->scopedUnique(ignoreRecord: true),
                         Textarea::make('description')
                             ->rows(2)
                             ->maxLength(2000),

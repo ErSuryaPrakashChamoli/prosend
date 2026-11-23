@@ -3,6 +3,11 @@
 namespace App\Providers\Filament;
 
 use App\Filament\Pages\Dashboard;
+use App\Filament\Pages\Tenancy\EditClientSettings;
+use App\Http\Controllers\OAuthMailboxController;
+use App\Http\Controllers\PrintReportController;
+use App\Http\Middleware\SetCurrentClientFromTenant;
+use App\Models\Client;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -17,6 +22,7 @@ use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Route;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 class AdminPanelProvider extends PanelProvider
@@ -47,6 +53,7 @@ class AdminPanelProvider extends PanelProvider
             ->id('admin')
             ->path('admin')
             ->login()
+            ->passwordReset()
             ->brandName('ProSend')
             ->brandLogo(fn () => view('filament.admin.logo'))
             ->brandLogoHeight('2rem')
@@ -63,14 +70,31 @@ class AdminPanelProvider extends PanelProvider
             ->unsavedChangesAlerts()
             ->globalSearchKeyBindings(['command+k', 'ctrl+k'])
             ->databaseNotifications()
+            // Each client is a tenant: its data lives under /admin/{client}, and the menu switches between clients.
+            ->tenant(Client::class, slugAttribute: 'slug')
+            ->tenantProfile(EditClientSettings::class)
+            ->searchableTenantMenu()
+            ->authenticatedTenantRoutes(function (): void {
+                Route::get('reports/print', PrintReportController::class)->name('reports.print');
+                Route::get('mailboxes/connect/{provider}', [OAuthMailboxController::class, 'connect'])->name('mailboxes.connect');
+            })
+            // Fixed, client-independent address registered with Google and Microsoft.
+            ->authenticatedRoutes(function (): void {
+                Route::get('oauth/{provider}/callback', [OAuthMailboxController::class, 'callback'])->name('mailboxes.oauth-callback');
+            })
+            ->tenantMiddleware([
+                SetCurrentClientFromTenant::class,
+            ], isPersistent: true)
             ->renderHook(PanelsRenderHook::CONTENT_START, fn () => view('filament.admin.queue-stalled-banner'))
             ->navigationGroups([
                 'Overview',
+                'Inbox',
                 'Email Operations',
                 'Audiences',
                 'Deliverability',
                 'Infrastructure',
                 'System',
+                'Agency',
             ])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')

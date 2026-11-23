@@ -1,10 +1,13 @@
 <?php
 
 use App\Enums\ApiKeyMode;
+use App\Enums\Permission;
 use App\Filament\Resources\ApiKeys\ApiKeyResource;
 use App\Filament\Resources\ApiKeys\Pages\ManageApiKeys;
 use App\Models\ApiKey;
 use App\Models\AuditLog;
+use App\Models\ClientMembership;
+use App\Models\Role;
 use App\Models\SenderIdentity;
 use App\Models\User;
 use Livewire\Livewire;
@@ -106,4 +109,27 @@ it('records which settings an edit changed, without the secret', function () {
     expect($properties['changed'])->toEqualCanonicalizing(['daily_send_limit', 'allowed_ips'])
         ->and($properties)->toMatchArray(['daily_send_limit' => 250, 'allowed_ips' => ['203.0.113.0/24'], 'allowed_senders' => ['billing@acme.test']])
         ->and(json_encode($properties))->not->toContain(substr($plaintext, -40));
+});
+
+it('only lets people give a key access they have themselves, and never lets a test key change data', function () {
+    $sender = SenderIdentity::factory()->create();
+    $customRole = Role::factory()->withPermissions([Permission::ManageIntegrations, Permission::ViewCampaigns])->create();
+    $integrator = User::factory()->withoutClient()->create();
+    ClientMembership::query()->create(['user_id' => $integrator->id, 'role_id' => $customRole->id]);
+    $this->actingAs($integrator->refreshRoles());
+
+    Livewire::test(ManageApiKeys::class)
+        ->callAction('create', data: ['name' => 'CRM', 'mode' => 'live', 'scopes' => ['conversations:read'], 'allowed_sender_identity_ids' => [$sender->id], 'rate_limit_per_minute' => 60])
+        ->assertHasActionErrors(['scopes']);
+    Livewire::test(ManageApiKeys::class)
+        ->callAction('create', data: ['name' => 'Dashboard', 'mode' => 'live', 'scopes' => ['campaigns:read'], 'allowed_sender_identity_ids' => [$sender->id], 'rate_limit_per_minute' => 60])
+        ->assertHasNoActionErrors();
+
+    $this->actingAs(User::factory()->admin()->create());
+
+    Livewire::test(ManageApiKeys::class)
+        ->callAction('create', data: ['name' => 'Sandbox', 'mode' => 'test', 'scopes' => ['prospects:write'], 'allowed_sender_identity_ids' => [$sender->id], 'rate_limit_per_minute' => 60])
+        ->assertHasActionErrors(['scopes']);
+
+    expect(ApiKey::query()->pluck('name')->all())->toBe(['Dashboard']);
 });
